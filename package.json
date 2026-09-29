@@ -1,0 +1,17 @@
+{
+  "name": "todo-devs",
+  "version": "0.1.0",
+  "description": "Kanban-style agent task board with dependency scheduling, orchestration, node workflows and SSH remote control",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "todo-devs": "bin/todo-devs.js"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node bin/todo-devs.js serve",
+    "check": "node --check bin/todo-devs.js"
+  }
+}
