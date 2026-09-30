@@ -1,0 +1,22 @@
+{
+  "name": "todo-devs-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "setup": "npm install && npx expo install expo-router expo-secure-store expo-linking expo-constants expo-status-bar expo-build-properties expo-clipboard react-native-safe-area-context react-native-screens @expo/vector-icons && npx expo install --fix",
+    "start": "expo start",
+    "ios": "expo run:ios",
+    "android": "expo run:android",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "expo": "~57.0.3",
+    "react": "19.2.0",
+    "react-native": "0.86.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.0",
+    "typescript": "~5.9.0"
+  }
+}

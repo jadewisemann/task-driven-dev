@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "todo.devs",
+    "slug": "todo-devs",
+    "scheme": "todo-devs",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0f1117",
+    "ios": {
+      "bundleIdentifier": "dev.tododevs.mobile",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        },
+        "NSLocalNetworkUsageDescription": "todo.devs connects to your todo.devs server on your local network or Tailscale."
+      }
+    },
+    "android": {
+      "package": "dev.tododevs.mobile"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}
