@@ -1,4 +1,4 @@
-import { getPeer, onEvent, onPeerChange, rpc } from './api.js';
+import { getPeer, onEvent, onLocalEvent, onPeerChange, rpc, rpcLocal } from './api.js';
 import { h, mountInto, promptForm, toast } from './dom.js';
 import { views } from './views/index.js';
 import { sessionSlot } from './session.js';
@@ -95,7 +95,10 @@ function mountView() {
     project: currentProject(),
     projects: state.projects,
     rpc,
+    rpcLocal,
     onEvent,
+    onLocalEvent,
+    peer: getPeer(),
     showError,
     navigate: (id) => (location.hash = `#/${id}`),
     reloadProjects: () => loadProjects().then(mountView),

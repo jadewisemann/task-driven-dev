@@ -14,6 +14,8 @@ import { createScheduler } from './runtime/scheduler.js';
 import { registerRuntimeRpc } from './runtime/rpc.js';
 import { createWorkflowRunner, createWorkflowService, registerWorkflowRpc } from './domain/workflows.js';
 import { createOrchestrator, registerOrchestratorRpc } from './orchestrator/orchestrator.js';
+import { createPeerManager, registerPeerRpc } from './remote/peers.js';
+import { toRpcError } from './core/errors.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
 
@@ -51,6 +53,7 @@ export function createApp(options = {}) {
   runner.onCancelRun = wfRunner.cancel; // runs.cancel also reaches standalone workflow runs
   const orchestrator = createOrchestrator({ db, bus, services, runner, runs, scheduler, log });
   if (options.recover) orchestrator.recoverInterrupted();
+  const peers = createPeerManager({ db, bus, log });
   if (options.recover) runner.recoverInterrupted();
 
   const app = {
@@ -66,18 +69,31 @@ export function createApp(options = {}) {
     scheduler,
     wfRunner,
     orchestrator,
+    peers,
     /** Hooks run on shutdown (child processes, remote connections, timers). */
     disposers: [
       async () => {
         scheduler.stopAll();
         orchestrator.abortAll();
+        peers.closeAll();
         await Promise.all([runner.cancelAll(), wfRunner.cancelAll()]);
         runs.close(); // late output from runs that outlived the wait is dropped, never written to a closed DB
       },
     ],
 
-    /** Executes a JSON-RPC request object. `peer` routing is added by the remote feature. */
+    /**
+     * Executes a JSON-RPC request object. With `peer` (id or name) the call is
+     * proxied to that remote session; `peers.*` management always stays local.
+     */
     async dispatch(request) {
+      if (request.peer && !String(request.method || '').startsWith('peers.')) {
+        try {
+          const result = await peers.call(request.peer, request.method, request.params ?? {});
+          return { jsonrpc: '2.0', id: request.id ?? null, result: result ?? null };
+        } catch (err) {
+          return { jsonrpc: '2.0', id: request.id ?? null, error: toRpcError(err).toJSON() };
+        }
+      }
       return rpc.handle(request, { app, log });
     },
 
@@ -111,6 +127,7 @@ export function createApp(options = {}) {
   registerRuntimeRpc(rpc, { runner, scheduler, runs, services, log });
   registerWorkflowRpc(rpc, { workflows, wfRunner, services });
   registerOrchestratorRpc(rpc, orchestrator);
+  registerPeerRpc(rpc, peers);
 
   return app;
 }

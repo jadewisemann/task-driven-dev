@@ -2,20 +2,38 @@ import { createApp } from '../server/app.js';
 import { readDaemonInfo, resolveHome } from '../server/core/paths.js';
 
 /**
- * Calls an RPC method on the running server for this home (so its event bus,
- * scheduler and UI see the change). Falls back to a short-lived in-process
- * instance when no server is running.
+ * One CLI command = one session. With a running server for this home, calls go
+ * to it over HTTP (so its bus, scheduler and UI see them). Otherwise a single
+ * in-process instance is opened for the whole command — including at most one
+ * SSH session per peer — and closed at the end.
+ *
+ * @returns {Promise<{mode: 'daemon'|'embedded', call: (method, params?, peer?) => Promise<any>, close: () => Promise<void>}>}
  */
-export async function callRpc({ home, method, params = {}, peer }) {
+export async function openSession({ home }) {
   const dir = resolveHome(home);
   const daemon = readDaemonInfo(dir);
-  if (daemon) return callHttp(daemon, method, params, peer);
-  if (peer) throw new Error('Remote peers require a running server: start one with `todo-devs serve`');
+  if (daemon) {
+    return { mode: 'daemon', call: (method, params = {}, peer) => callHttp(daemon, method, params, peer), close: async () => {} };
+  }
   const app = createApp({ home: dir, log: () => {} });
+  return {
+    mode: 'embedded',
+    async call(method, params = {}, peer) {
+      const response = await app.dispatch({ jsonrpc: '2.0', id: 1, method, params, peer });
+      if (response.error) throw Object.assign(new Error(response.error.message), response.error);
+      return response.result;
+    },
+    close: () => app.close(),
+  };
+}
+
+/** Single call convenience (opens and closes a session). */
+export async function callRpc({ home, method, params = {}, peer }) {
+  const session = await openSession({ home });
   try {
-    return await app.call(method, params);
+    return await session.call(method, params, peer);
   } finally {
-    await app.close();
+    await session.close();
   }
 }
 
