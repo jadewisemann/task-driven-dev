@@ -8,10 +8,13 @@ SSH 원격 세션 전환, 워크플로우 실행을 할 수 있습니다. 편집
 
 ```bash
 cd apps/mobile
-npm run setup        # npm install + SDK 57 에 맞는 expo 패키지 버전 설치(npx expo install --fix)
+npm ci               # package-lock.json 의 검증된 버전 설치 (CI 와 동일)
 npx expo start       # Expo Go 로 QR 스캔, 또는
 npm run ios          # / npm run android — 개발 빌드
 ```
+
+SDK 를 올릴 때는 `npm run setup`(= `npx expo install --fix`)으로 버전을 다시 맞추고 `npx expo-doctor` 로 확인한 뒤 lockfile 을 커밋합니다.
+테스트: `npm test`(코어 — 이 저장소의 실제 서버를 띄워 검증), `npx tsc --noEmit`, `npm run export`(iOS·Android 번들).
 
 ## 서버와 페어링
 

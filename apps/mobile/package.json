@@ -4,19 +4,32 @@
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
-    "setup": "npm install && npx expo install expo-router expo-secure-store expo-linking expo-constants expo-status-bar expo-build-properties expo-clipboard react-native-safe-area-context react-native-screens @expo/vector-icons && npx expo install --fix",
+    "setup": "npm install && npx expo install expo-router expo-secure-store expo-linking expo-constants expo-status-bar expo-build-properties expo-clipboard expo-font react-native-safe-area-context react-native-screens @expo/vector-icons && npx expo install --fix",
     "start": "expo start",
     "ios": "expo run:ios",
     "android": "expo run:android",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --test-timeout=120000 \"test/*.test.ts\"",
+    "export": "expo export --platform ios --platform android --output-dir dist"
   },
   "dependencies": {
-    "expo": "~57.0.3",
-    "react": "19.2.0",
-    "react-native": "0.86.0"
+    "@expo/vector-icons": "^15.0.2",
+    "expo": "~57.0.26",
+    "expo-build-properties": "~57.0.22",
+    "expo-clipboard": "~57.0.2",
+    "expo-constants": "~57.0.20",
+    "expo-font": "~57.0.4",
+    "expo-linking": "~57.0.11",
+    "expo-router": "~57.0.24",
+    "expo-secure-store": "~57.0.4",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0"
   },
   "devDependencies": {
     "@types/react": "~19.2.0",
-    "typescript": "~5.9.0"
+    "typescript": "~6.0.3"
   }
 }

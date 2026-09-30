@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'feat/**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # push + pull_request for the same branch share a group, so only the newest run is kept
+  group: ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: Server · ${{ matrix.os }} · Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node --version && git --version
+      # The server has no dependencies: nothing to install.
+      - run: npm test
+
+  e2e:
+    name: Web UI (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-save playwright
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+
+  mobile:
+    name: Mobile app (Expo)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # package-lock.json pins the versions verified here; `npm run setup` re-resolves them for an SDK upgrade.
+      - name: Install
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm run setup; fi
+      - name: Type-check
+        run: npx tsc --noEmit
+      - name: Core tests (against a real server from this repo)
+        run: npm test
+      - name: Expo doctor
+        run: npx expo-doctor
+      - name: Bundle for iOS and Android
+        run: npm run export
+      - name: Upload resolved dependency manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-dependencies
+          path: |
+            apps/mobile/package.json
+            apps/mobile/package-lock.json
+          if-no-files-found: ignore

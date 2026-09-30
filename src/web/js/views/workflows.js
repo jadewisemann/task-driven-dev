@@ -195,6 +195,16 @@ export const workflowsView = {
         ),
         logViewer(ctx, runId, { height: 180 }),
       );
+      // A fast workflow can finish before this RPC returned: apply the outcome we already saw.
+      if (finishedRuns.has(runId)) showFinished(finishedRuns.get(runId));
+    }
+
+    /** Outcomes of recent runs (events may arrive before workflows.run responds). */
+    const finishedRuns = new Map();
+    function showFinished(p) {
+      runPanel.querySelector('.cancel-run')?.remove();
+      const el = runPanel.querySelector('.run-status');
+      if (el) el.textContent = p.status === 'succeeded' ? `✓ succeeded${p.result ? ` — ${JSON.stringify(p.result).slice(0, 160)}` : ''}` : `✗ ${p.status}: ${p.error || ''}`;
     }
 
     async function createWorkflow() {
@@ -252,10 +262,10 @@ export const workflowsView = {
         }
         canvas.setStatus(p.nodeId, { status: p.status, visit: p.visit, ports: p.ports });
         if (p.output !== undefined) state.outputs[p.nodeId] = p.output;
-      } else if (e.type === 'workflow.run.finished' && p.runId === state.runId) {
-        runPanel.querySelector('.cancel-run')?.remove();
-        const el = runPanel.querySelector('.run-status');
-        if (el) el.textContent = p.status === 'succeeded' ? `✓ succeeded${p.result ? ` — ${JSON.stringify(p.result).slice(0, 160)}` : ''}` : `✗ ${p.status}: ${p.error || ''}`;
+      } else if (e.type === 'workflow.run.finished') {
+        finishedRuns.set(p.runId, p);
+        if (finishedRuns.size > 50) finishedRuns.delete(finishedRuns.keys().next().value);
+        if (p.runId === state.runId) showFinished(p);
       }
     });
 

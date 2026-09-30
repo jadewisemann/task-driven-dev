@@ -1,0 +1,3 @@
+#!/bin/sh
+# "Installed" todo-devs on the fake remote host: runs this checkout's CLI.
+exec node "$TODO_DEVS_BIN" "$@"
