@@ -105,6 +105,9 @@ export function createTaskService({ db, bus }) {
   const svc = {
     edges,
 
+    /** Optional hook set by the agents feature: throws if an assignee id is unknown. */
+    validateAssignee: null,
+
     list({ projectId, status } = {}) {
       const where = [];
       const params = [];
@@ -135,6 +138,7 @@ export function createTaskService({ db, bus }) {
     },
 
     create(input) {
+      if (input.assigneeId) svc.validateAssignee?.(input.assigneeId);
       const id = newId('tsk');
       const ts = now();
       const status = input.status || 'backlog';
@@ -170,6 +174,7 @@ export function createTaskService({ db, bus }) {
     /** Updates any subset of FIELDS plus `dependsOn` (full replacement). */
     update(id, patch) {
       const current = svc.get(id);
+      if (patch.assigneeId) svc.validateAssignee?.(patch.assigneeId);
       const sets = [];
       const params = [];
       for (const [key, value] of Object.entries(patch)) {

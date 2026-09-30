@@ -7,6 +7,7 @@ import { dbPath, resolveHome } from './core/paths.js';
 import { RpcRegistry } from './rpc/registry.js';
 import { createProjectService, registerProjectRpc } from './domain/projects.js';
 import { createTaskService, registerTaskRpc } from './domain/tasks.js';
+import { createAgentService, registerAgentRpc } from './domain/agents.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
 
@@ -28,7 +29,10 @@ export function createApp(options = {}) {
 
   const projects = createProjectService({ db, bus });
   const tasks = createTaskService({ db, bus });
+  const agents = createAgentService({ db, bus });
+  tasks.validateAssignee = (id) => agents.get(id);
   projects.ensureDefault();
+  agents.seedStarterTeam();
 
   const app = {
     version: pkg.version,
@@ -37,7 +41,7 @@ export function createApp(options = {}) {
     bus,
     rpc,
     log,
-    services: { projects, tasks },
+    services: { projects, tasks, agents },
     /** Hooks run on shutdown (child processes, remote connections, timers). */
     disposers: [],
 
@@ -72,6 +76,7 @@ export function createApp(options = {}) {
   });
   registerProjectRpc(rpc, projects);
   registerTaskRpc(rpc, tasks, projects);
+  registerAgentRpc(rpc, { agents, tasks, projects });
 
   return app;
 }
