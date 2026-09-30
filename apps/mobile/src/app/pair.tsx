@@ -55,7 +55,7 @@ export default function Pair() {
       </Card>
       <Muted small>Only continue if you just created this link with `todo-devs pair` on your own computer. After pairing, everything you do in the app goes to this server.</Muted>
       <ErrorText error={error} />
-      <Button kind="primary" title="Pair" onPress={confirm} disabled={!ready} />
+      <Button testID="pair-confirm" kind="primary" title="Pair" onPress={confirm} disabled={!ready} />
       <Button kind="ghost" title="Cancel" onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))} />
     </Screen>
   );

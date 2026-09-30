@@ -54,9 +54,9 @@ export default function Board() {
         {(column === 'backlog' || column === 'todo') && (
           <Row>
             <View style={{ flex: 1 }}>
-              <Input placeholder={`Add to ${col.title}…`} value={title} onChangeText={setTitle} onSubmitEditing={() => void add().catch(() => {})} returnKeyType="done" />
+              <Input testID="quick-add-input" placeholder={`Add to ${col.title}…`} value={title} onChangeText={setTitle} onSubmitEditing={() => void add().catch(() => {})} returnKeyType="done" />
             </View>
-            <Button title="Add" onPress={add} disabled={!title.trim()} />
+            <Button testID="quick-add-button" title="Add" onPress={add} disabled={!title.trim()} />
           </Row>
         )}
       </Screen>

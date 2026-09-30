@@ -7,9 +7,14 @@ SSH 로 다른 머신의 세션을 그대로 원격 조작합니다. 휴대폰�
 - 런타임 의존성 없음 — Node.js **22.13+** 만 있으면 됩니다 (`node:sqlite`, `node:http`).
 - 데이터: `~/.todo-devs` (`--home` 또는 `TODO_DEVS_HOME` 으로 변경)
 
+> **알파 테스트 중 (v0.1.0-alpha.1)** — 설치·테스트 시나리오·알려진 제한은 [docs/ALPHA.md](docs/ALPHA.md),
+> 빌드(npm 패키지·Android APK·iOS 시뮬레이터)는 [Releases](https://github.com/jadewisemann/task-driven-dev/releases), 피드백은 [Issues](https://github.com/jadewisemann/task-driven-dev/issues/new/choose).
+
 ```bash
-node bin/todo-devs.js serve          # http://127.0.0.1:7420
-# 또는: npm link && todo-devs serve
+npm install -g ./todo-devs-0.1.0-alpha.1.tgz   # 릴리스 자산 (또는 소스에서 npm link)
+todo-devs doctor                               # 환경 점검
+todo-devs serve                                # http://127.0.0.1:7420
+todo-devs service install                      # 로그인 시 자동 시작 (launchd / systemd --user)
 ```
 
 ## 화면
@@ -22,6 +27,7 @@ node bin/todo-devs.js serve          # http://127.0.0.1:7420
 | **Workflows** | n8n 식 캔버스 에디터. 프로젝트 워크플로우(JSON 입력으로 실행)와 에이전트 그래프(에이전트의 작업 절차) |
 | **Runs** | 모든 실행 기록과 실시간 로그 |
 | **Remote** | SSH 세션 관리. 상단 세션 스위처로 원격 머신을 선택하면 모든 화면이 그 머신을 조작 |
+| **Settings** | 버전, 환경 점검(doctor), 서비스·데이터 경로, 백업 안내, 알파 피드백 링크 |
 
 ## 핵심 개념
 
@@ -88,21 +94,29 @@ todo-devs run [--concurrency 2] [--auto-approve] | stop
 todo-devs peer add|list|ping|rm …
 todo-devs pair [--host ADDR] | token rotate     # 모바일/다른 기기 페어링
 todo-devs call <method> [json] | methods        # 모든 기능은 JSON-RPC 메서드로 노출
+todo-devs --version | doctor [--json]           # 버전, 환경 점검
+todo-devs service install|uninstall|status [--host 0.0.0.0] [--port N] [--print]
+todo-devs backup [--out FILE] | restore FILE [--force]
 ```
 
 실행 중인 서버가 있으면 CLI 는 그 서버로 호출합니다. `run`/`plan` 은 서버가 필요합니다.
 
-## 테스트 / CI
+## 테스트 / CI / 릴리스
 
 ```bash
-npm test                 # 서버 테스트 42개 (node:test, 의존성 없음 — git 과 sh 만 필요)
-npm i --no-save playwright && npx playwright install chromium && npm run test:e2e   # 웹 UI 5개 흐름
+npm test                 # 서버 테스트 (node:test, 의존성 없음 — git 과 sh 만 필요)
+npm i --no-save playwright && npx playwright install chromium && npm run test:e2e   # 웹 UI 흐름
 cd apps/mobile && npm ci && npx tsc --noEmit && npm test && npx expo-doctor && npm run export
 ```
 
 GitHub Actions(`.github/workflows/ci.yml`)가 push/PR 마다 실행합니다:
-서버 테스트는 **macOS·Linux × Node 22·24**, 웹 e2e 는 Chromium, 모바일은 `npm ci` → 타입체크 → 코어 테스트 → `expo-doctor` → iOS·Android 번들 생성까지.
+서버 테스트는 **macOS·Linux × Node 22·24**, 웹 e2e 는 Chromium, 모바일은 `npm ci` → 타입체크 → 코어 테스트 → `expo-doctor` → iOS·Android 번들,
+**Android** 는 릴리스 APK 빌드 후 에뮬레이터에서 Maestro(`apps/mobile/e2e/smoke.yaml`)로 실제 서버와 페어링 → 카드 추가 → 서버에 반영됐는지 확인,
+**iOS** 는 시뮬레이터용 Release 빌드 후 시뮬레이터에서 실행 확인.
 원격(SSH) 테스트는 `test/fixtures/bin/ssh` 가짜 ssh 로 원격 명령을 그대로 `sh -c` 실행해 검증합니다.
+
+릴리스: `package.json` 버전, `apps/mobile/app.json`(`version`·`extra.channel`, `versionCode`/`buildNumber` 증가), `CHANGELOG.md` 섹션을 맞춘 뒤 `git tag v<버전> && git push origin v<버전>` →
+`release.yml` 이 전체 CI 를 돌리고 npm 패키지·APK·iOS 시뮬레이터 빌드·SHA256SUMS 를 GitHub 릴리스(버전에 `-` 가 있으면 prerelease)로 게시합니다.
 
 ## 보안 메모
 
@@ -133,6 +147,8 @@ src/server/remote/        피어 관리, 원격 클라이언트
 src/web/                  빌드 없는 ES 모듈 UI
 apps/mobile/              React Native(Expo) 앱 — src/core 는 React 비의존 TS (RPC·롱폴링·페어링)
 test/                     서버 테스트, test/e2e 웹 UI 테스트, fixtures(가짜 ssh)
-.github/workflows/ci.yml  CI
+.github/workflows/        ci.yml (테스트·빌드), release.yml (태그 → 릴리스)
+.github/scripts/          Android 에뮬레이터 e2e
+docs/ALPHA.md             알파 테스트 가이드
 docs/PLAN.md              구현 계획
 ```

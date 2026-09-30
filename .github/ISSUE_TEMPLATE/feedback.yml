@@ -1,0 +1,30 @@
+name: Alpha feedback
+description: Ideas, friction, or how the test scenarios went
+labels: [feedback, alpha]
+body:
+  - type: textarea
+    id: feedback
+    attributes:
+      label: Feedback
+      description: What worked, what was confusing, what you wished it did.
+    validations:
+      required: true
+  - type: checkboxes
+    id: scenarios
+    attributes:
+      label: Scenarios you tried (docs/ALPHA.md)
+      options:
+        - label: Install + doctor
+        - label: Board with dependencies + Run all
+        - label: Orchestrator plan → run
+        - label: Real harness (claude-code / codex / …) in a git project
+        - label: Workflows with JSON input
+        - label: SSH remote session
+        - label: Mobile pairing + board
+        - label: Login service
+        - label: Backup / restore
+  - type: input
+    id: setup
+    attributes:
+      label: Setup
+      placeholder: macOS 15 / Node 22.14 / claude-code 2.x / Android 15

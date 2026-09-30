@@ -139,15 +139,23 @@ test('workflows: create from template, connect a node, run it', async (t) => {
   await page.click('.save-btn');
   // Hold the workflows.run response so the run's finished event always arrives first
   // (regression test: the panel used to stay on "running…").
+  const routeErrors = [];
   await page.route('**/api/rpc', async (route) => {
-    const response = await route.fetch();
-    if ((route.request().postData() || '').includes('"workflows.run"')) await new Promise((r) => setTimeout(r, 800));
-    await route.fulfill({ response });
+    try {
+      const response = await route.fetch();
+      if ((route.request().postData() || '').includes('"workflows.run"')) await new Promise((r) => setTimeout(r, 800));
+      await route.fulfill({ response });
+    } catch (err) {
+      // A request held while the page closes has nothing to answer; anything else is a real failure.
+      if (!page.isClosed()) routeErrors.push(err);
+    }
   });
   await page.click('text=▶ Run');
   await page.click('.modal .btn.primary');
   await page.waitForFunction(() => /succeeded|failed|cancelled/.test(document.querySelector('.run-status')?.textContent || ''), null, { timeout: 15000 });
   assert.match(await page.locator('.run-status').innerText(), /succeeded/);
+  await page.unrouteAll({ behavior: 'wait' });
+  assert.deepEqual(routeErrors, []);
   await done();
 });
 
@@ -170,6 +178,6 @@ test('settings: version, health checks and alpha feedback link', async (t) => {
   await page.waitForSelector('.doctor-table tr');
   assert.match(await page.locator('.alpha-badge').innerText(), /alpha · v\d/);
   assert.ok((await page.locator('.doctor-table tr').count()) >= 6);
-  assert.match(await page.locator('a:has-text("Report an issue")').getAttribute('href'), /\/issues$/);
+  assert.match(await page.locator('a:has-text("Report an issue")').getAttribute('href'), /\/issues\/new\/choose$/);
   await done();
 });
