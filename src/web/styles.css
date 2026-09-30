@@ -391,3 +391,8 @@ label.inline select { width: auto; max-width: 320px; }
 .plan-running { color: var(--st-running); border-color: var(--st-running); }
 .plan-discarded { color: var(--muted); }
 .composer-actions select, .flow-toolbar select { width: auto; max-width: 320px; }
+.plan-head .spacer { flex: 1; }
+.plan-card + .plan-card { margin-top: 10px; }
+.desc-row td { border-bottom: 1px solid var(--border); padding-top: 0; }
+.plan-desc { font-size: 12px; color: #c3c7d4; }
+.plan-incomplete { color: var(--st-failed); border-color: var(--st-failed); }

@@ -33,6 +33,7 @@ export function createScheduler({ bus, services, runner, log = console.error }) 
       state: s.state,
       reason: s.reason,
       options: s.options,
+      scope: s.scope ? [...s.scope] : null,
       active: [...s.active.keys()],
       stats: { ...s.stats },
       startedAt: s.startedAt,
@@ -122,8 +123,9 @@ export function createScheduler({ bus, services, runner, log = console.error }) 
     const current = services.tasks.list({ projectId: s.projectId });
     const now = new Map(current.map((t) => [t.id, t]));
 
+    const inScope = (t) => !s.scope || s.scope.has(t.id);
     const ready = current
-      .filter((t) => t.status === 'todo' && !s.active.has(t.id) && !runner.isTaskActive(t.id))
+      .filter((t) => inScope(t) && t.status === 'todo' && !s.active.has(t.id) && !runner.isTaskActive(t.id))
       .filter((t) => t.dependsOn.every((id) => now.get(id)?.status === 'done'))
       .sort((a, b) => b.priority - a.priority || a.position - b.position);
     const unassigned = ready.filter((t) => !t.assigneeId || !safeAgent(t.assigneeId));
@@ -144,7 +146,7 @@ export function createScheduler({ bus, services, runner, log = console.error }) 
     }
 
     // Decide the session state.
-    const open = current.filter((t) => !TERMINAL.has(t.status) && t.status !== 'backlog');
+    const open = current.filter((t) => inScope(t) && !TERMINAL.has(t.status) && t.status !== 'backlog');
     let state = 'running';
     let reason = null;
     if (s.active.size === 0 && runner.activeCount(s.projectId) === 0) {
@@ -184,7 +186,12 @@ export function createScheduler({ bus, services, runner, log = console.error }) 
   const scheduler = {
     REVIEW_POLICIES,
 
-    start(projectId, { concurrency = 2, includeBacklog = false, reviewPolicy = 'wait' } = {}) {
+    /**
+     * @param {string} projectId
+     * @param {{concurrency?: number, includeBacklog?: boolean, reviewPolicy?: string, taskIds?: string[]}} [opts]
+     *   taskIds: only schedule these tasks (e.g. one orchestrator plan); omit to run the whole board.
+     */
+    start(projectId, { concurrency = 2, includeBacklog = false, reviewPolicy = 'wait', taskIds } = {}) {
       services.projects.get(projectId);
       const existing = sessions.get(projectId);
       if (existing && !existing.closed) throw conflict('Scheduler is already running for this project');
@@ -194,6 +201,7 @@ export function createScheduler({ bus, services, runner, log = console.error }) 
       const s = {
         projectId,
         options: { concurrency, includeBacklog, reviewPolicy },
+        scope: taskIds ? new Set(taskIds) : null,
         active: new Map(),
         retries: new Map(),
         stats: { succeeded: 0, failed: 0, retried: 0, review: 0 },
@@ -228,6 +236,18 @@ export function createScheduler({ bus, services, runner, log = console.error }) 
 
     status(projectId) {
       return snapshot(sessions.get(projectId));
+    },
+
+    /**
+     * Adds tasks to a live session. Returns false when no session is live
+     * (the caller should start one). Unscoped sessions already cover every task.
+     */
+    extend(projectId, taskIds) {
+      const s = sessions.get(projectId);
+      if (!s || s.closed) return false;
+      if (s.scope) for (const id of taskIds) s.scope.add(id);
+      requestTick(s);
+      return true;
     },
 
     stopAll() {

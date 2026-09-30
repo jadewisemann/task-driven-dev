@@ -50,6 +50,7 @@ export function createApp(options = {}) {
   runner.agentGraphExecutor = wfRunner.executeAgentGraph;
   runner.onCancelRun = wfRunner.cancel; // runs.cancel also reaches standalone workflow runs
   const orchestrator = createOrchestrator({ db, bus, services, runner, runs, scheduler, log });
+  if (options.recover) orchestrator.recoverInterrupted();
   if (options.recover) runner.recoverInterrupted();
 
   const app = {
@@ -69,6 +70,7 @@ export function createApp(options = {}) {
     disposers: [
       async () => {
         scheduler.stopAll();
+        orchestrator.abortAll();
         await Promise.all([runner.cancelAll(), wfRunner.cancelAll()]);
         runs.close(); // late output from runs that outlived the wait is dropped, never written to a closed DB
       },

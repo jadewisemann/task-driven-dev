@@ -14,46 +14,51 @@ const ROLE_FAMILY = {
   researcher: ['generalist', 'engineer'],
 };
 
+const roleScore = (agent, role) => (agent.role === role ? 10 : ROLE_FAMILY[role]?.includes(agent.role) ? 5 : agent.role === 'generalist' ? 3 : 0);
+
 /**
- * Chooses the cheapest capable agent for each planned task:
- *   - a name suggested by the orchestrator model wins when it exists and is capable;
- *   - otherwise score = role fit + tier fit (the smallest tier ≥ required is best,
- *     under-powered agents are heavily penalised) + light load balancing.
- * Orchestrator-role agents are never assigned implementation work.
+ * Chooses the cheapest capable agent for each planned task.
  *
- * @returns {object[]} tasks with {agentId, agentName, assignReason}
+ *   1. Capable agents (tier ≥ required) are always preferred over under-powered ones;
+ *      among them: best role fit, then the smallest tier, then the lightest load.
+ *   2. A teammate suggested by the orchestrator model is honoured when it is capable
+ *      and not wastefully over-powered (at most one tier above what is needed).
+ *   3. Only when no teammate is capable is an orchestrator-role agent borrowed;
+ *      failing that, the strongest available agent gets it (flagged as under-powered).
+ *
+ * @param {object[]} tasks planned tasks ({key, role, complexity, agent?})
+ * @param {object[]} agents
+ * @param {Map<string, number>} [initialLoad] tasks already given to each agent (e.g. kept assignments)
  */
-export function assignAgents(tasks, agents) {
+export function assignAgents(tasks, agents, initialLoad = new Map()) {
   const pool = agents.filter((a) => a.role !== 'orchestrator');
-  const load = new Map(pool.map((a) => [a.id, 0]));
+  const leads = agents.filter((a) => a.role === 'orchestrator');
+  const load = new Map(agents.map((a) => [a.id, initialLoad.get(a.id) || 0]));
+  const give = (task, agent, assignReason) => {
+    load.set(agent.id, load.get(agent.id) + 1);
+    return { ...task, agentId: agent.id, agentName: agent.name, assignReason };
+  };
+
   return tasks.map((task) => {
     const need = requiredTier(task.complexity);
     const suggested = task.agent && pool.find((a) => a.name.toLowerCase() === task.agent.toLowerCase());
-    if (suggested && suggested.tier >= need) {
-      load.set(suggested.id, load.get(suggested.id) + 1);
-      return { ...task, agentId: suggested.id, agentName: suggested.name, assignReason: `suggested by orchestrator (tier ${suggested.tier} ≥ ${need})` };
+    if (suggested && suggested.tier >= need && suggested.tier <= need + 1) {
+      return give(task, suggested, `suggested by orchestrator (tier ${suggested.tier} for complexity ${task.complexity})`);
     }
-    let best = null;
-    for (const a of pool) {
-      const roleScore = a.role === task.role ? 10 : ROLE_FAMILY[task.role]?.includes(a.role) ? 5 : a.role === 'generalist' ? 3 : 0;
-      const tierScore = a.tier >= need ? -(a.tier - need) * 3 : -(need - a.tier) * 9;
-      const score = roleScore + tierScore - load.get(a.id) * 0.5;
-      if (!best || score > best.score) best = { agent: a, score, roleScore };
+    const capable = pool.filter((a) => a.tier >= need);
+    const note = suggested ? ` (suggested ${suggested.name} is tier ${suggested.tier}: ${suggested.tier < need ? 'too small' : 'over-powered'})` : '';
+    if (capable.length) {
+      const ranked = capable
+        .map((a) => ({ a, score: roleScore(a, task.role) - (a.tier - need) * 4 - load.get(a.id) * 0.5 }))
+        .sort((x, y) => y.score - x.score);
+      const best = ranked[0].a;
+      const fit = roleScore(best, task.role) >= 10 ? `role ${task.role}` : roleScore(best, task.role) > 0 ? `close role (${best.role})` : `no ${task.role} specialist`;
+      return give(task, best, `${fit}, cheapest capable tier ${best.tier} for complexity ${task.complexity}${note}`);
     }
-    if (!best) return { ...task, agentId: null, agentName: null, assignReason: 'no agents available' };
-    if (best.agent.tier < need) {
-      // Nobody on the team is strong enough: borrow the orchestrator rather than under-power a hard task.
-      const lead = agents.filter((a) => a.role === 'orchestrator' && a.tier >= need).sort((a, b) => a.tier - b.tier)[0];
-      if (lead) return { ...task, agentId: lead.id, agentName: lead.name, assignReason: `no teammate reaches tier ${need}; assigned the orchestrator` };
-    }
-    load.set(best.agent.id, load.get(best.agent.id) + 1);
-    const why = [
-      best.roleScore >= 10 ? `role ${task.role}` : best.roleScore > 0 ? `close role (${best.agent.role})` : 'no role match',
-      best.agent.tier >= need ? `cheapest capable tier ${best.agent.tier} for complexity ${task.complexity}` : `under-powered: tier ${best.agent.tier} < needed ${need}`,
-      suggested ? `(suggested ${suggested.name} is tier ${suggested.tier}, too small)` : '',
-    ]
-      .filter(Boolean)
-      .join(', ');
-    return { ...task, agentId: best.agent.id, agentName: best.agent.name, assignReason: why };
+    const lead = leads.filter((a) => a.tier >= need).sort((a, b) => a.tier - b.tier)[0];
+    if (lead) return give(task, lead, `no teammate reaches tier ${need}; assigned the orchestrator${note}`);
+    const strongest = [...pool, ...leads].sort((a, b) => b.tier - a.tier || roleScore(b, task.role) - roleScore(a, task.role))[0];
+    if (!strongest) return { ...task, agentId: null, agentName: null, assignReason: 'no agents available' };
+    return give(task, strongest, `under-powered: best available is tier ${strongest.tier} < needed ${need}${note}`);
   });
 }

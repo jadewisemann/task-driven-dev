@@ -1,5 +1,44 @@
 import { topoSort } from '../domain/dag.js';
 
+export const MAX_DESCRIPTION = 4000;
+
+/**
+ * Removes the fewest obvious edges to make the plan acyclic. Only nodes that
+ * really sit on a cycle (can reach themselves) are touched, so ordering
+ * constraints of tasks merely downstream of a cycle are preserved.
+ */
+function breakCycles(tasks, warnings) {
+  const byKey = new Map(tasks.map((t) => [t.key, t]));
+  // dependents: key -> keys that depend on it
+  const reaches = (from, target) => {
+    const stack = [from];
+    const seen = new Set();
+    while (stack.length) {
+      const k = stack.pop();
+      for (const t of tasks) {
+        if (!t.dependsOn.includes(k) || seen.has(t.key)) continue;
+        if (t.key === target) return true;
+        seen.add(t.key);
+        stack.push(t.key);
+      }
+    }
+    return false;
+  };
+  for (let guard = 0; guard <= tasks.length; guard++) {
+    const { cycle } = topoSort(
+      tasks.map((t) => t.key),
+      tasks.flatMap((t) => t.dependsOn.map((d) => ({ from: d, to: t.key }))),
+    );
+    if (!cycle.length) return;
+    const victim = cycle.map((k) => byKey.get(k)).find((t) => reaches(t.key, t.key));
+    if (!victim) return;
+    // Drop only the dependencies that close a loop back to the victim.
+    const closing = victim.dependsOn.filter((d) => reaches(victim.key, d));
+    warnings.push(`"${victim.title}": removed dependencies ${closing.join(', ')} to break a cycle`);
+    victim.dependsOn = victim.dependsOn.filter((d) => !closing.includes(d));
+  }
+}
+
 export const MAX_PLAN_TASKS = 40;
 
 /** Prompt for the orchestrator model: turn a goal into a dependency-ordered task list. */
@@ -60,7 +99,7 @@ export function normalizePlan(raw) {
     tasks.push({
       key,
       title: t.title.trim().slice(0, 200),
-      description: typeof t.description === 'string' ? t.description.trim() : '',
+      description: typeof t.description === 'string' ? t.description.trim().slice(0, MAX_DESCRIPTION) : '',
       role: typeof t.role === 'string' && t.role.trim() ? t.role.trim().toLowerCase() : 'engineer',
       complexity: clampInt(t.complexity, 1, 5, 2),
       priority: clampInt(t.priority, 0, 3, 1),
@@ -73,17 +112,7 @@ export function normalizePlan(raw) {
     if (unknown.length) warnings.push(`"${t.title}": dropped unknown dependencies ${unknown.join(', ')}`);
     t.dependsOn = [...new Set(t.dependsOn.filter((d) => keys.has(d) && d !== t.key))];
   }
-  // Break cycles: drop incoming edges of nodes Kahn's algorithm could not order.
-  for (let guard = 0; guard < tasks.length; guard++) {
-    const { cycle } = topoSort(
-      tasks.map((t) => t.key),
-      tasks.flatMap((t) => t.dependsOn.map((d) => ({ from: d, to: t.key }))),
-    );
-    if (!cycle.length) break;
-    const victim = tasks.find((t) => t.key === cycle[0]);
-    warnings.push(`"${victim.title}": removed dependencies ${victim.dependsOn.join(', ')} to break a cycle`);
-    victim.dependsOn = victim.dependsOn.filter((d) => !cycle.includes(d));
-  }
+  breakCycles(tasks, warnings);
   return { summary: typeof raw?.summary === 'string' ? raw.summary : '', tasks, warnings };
 }
 
@@ -119,37 +148,59 @@ const guessRole = (text) => ROLE_RULES.find((r) => r.re.test(text))?.role || 'en
  */
 export function heuristicPlan(goal) {
   const text = goal.trim();
-  const lines = text
-    .split(/\n+/)
-    .map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim())
-    .filter(Boolean);
-  let segments = lines.length > 1 ? lines : text.split(/(?<=[.!?。])\s+|;\s*|,?\s+(?:and then|then|그리고 나서|그 다음(?:에)?|다음에|한 후(?:에)?|하고 나서|이후(?:에)?)\s+|,?\s*(?:그리고|및)\s+/i);
-  segments = segments.map((s) => s.trim().replace(/[.。]$/, '')).filter((s) => s.length > 2);
-  if (segments.length === 0) segments = [text];
-  const ordered = lines.length > 1 || /(then|다음|후에|나서|이후|먼저|first)/i.test(text);
+  const warnings = [];
+  const rawLines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  const numbered = rawLines.filter((l) => /^\d+[.)]\s/.test(l)).length >= 2;
+  const lines = rawLines.map((l) => l.replace(/^(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean);
 
-  const tasks = segments.slice(0, 15).map((seg, i) => ({
-    key: `t${i + 1}`,
-    title: seg.length > 90 ? `${seg.slice(0, 87)}…` : seg,
-    description: seg,
-    role: guessRole(seg),
-    complexity: guessComplexity(seg),
-    priority: 1,
-    agent: '',
-    dependsOn: [],
-  }));
+  // "Add Stripe checkout: endpoint, page, tests" -> context "Add Stripe checkout" + list items.
+  let context = '';
+  let body = text;
+  if (lines.length <= 1) {
+    const colon = text.match(/^([^:\n]{3,80}):\s*(.+)$/s);
+    if (colon && /,/.test(colon[2])) {
+      context = colon[1].trim();
+      body = colon[2];
+    }
+  }
+  const ORDER_WORDS = /\b(then|afterwards?|after that|finally|first)\b|그리고 나서|그 다음|다음에|한 후|하고 나서|이후|먼저|마지막으로/i;
+  let segments;
+  if (lines.length > 1) segments = lines;
+  else {
+    segments = body.split(/(?<=[.!?。])\s+|;\s*|,?\s+(?:and then|then|afterwards|after that|finally)\s+|,?\s*(?:그리고 나서|그 다음(?:에)?|다음에|한 후(?:에)?|하고 나서|이후(?:에)?|그리고|마지막으로)\s+/i);
+    // Comma / "and" lists inside a sentence are separate (parallel) steps.
+    segments = segments.flatMap((seg) => seg.split(/,\s*(?:and\s+)?|\s+and\s+(?=[a-z])/i));
+  }
+  segments = segments.map((s) => s.trim().replace(/^(?:and|then|also)\s+/i, '').replace(/[.。]$/, '')).filter((s) => s.length >= 2);
+  if (segments.length === 0) segments = [text];
+  if (segments.length > 15) warnings.push(`goal has ${segments.length} steps; planned the first 15`);
+  const ordered = numbered || (lines.length <= 1 && ORDER_WORDS.test(text));
+
+  const tasks = segments.slice(0, 15).map((seg, i) => {
+    const full = context ? `${context}: ${seg}` : seg;
+    return {
+      key: `t${i + 1}`,
+      title: full.length > 90 ? `${full.slice(0, 87)}…` : full,
+      description: full,
+      role: guessRole(seg),
+      complexity: guessComplexity(full),
+      priority: 1,
+      agent: '',
+      dependsOn: [],
+    };
+  });
   const isFollowUp = (t) => ['qa', 'writer', 'reviewer', 'devops'].includes(t.role);
   tasks.forEach((t, i) => {
     if (i === 0) return;
     if (isFollowUp(t)) {
+      // Tests/docs/deploy wait for the implementation work listed before them.
       t.dependsOn = tasks.slice(0, i).filter((p) => !isFollowUp(p) || p.role === 'qa').map((p) => p.key);
       if (t.dependsOn.length === 0) t.dependsOn = [tasks[i - 1].key];
     } else if (ordered) {
       t.dependsOn = [tasks[i - 1].key];
     }
   });
-  const implementation = tasks.filter((t) => !isFollowUp(t));
-  if (implementation.length >= 1 && !tasks.some((t) => t.role === 'reviewer')) {
+  if (!tasks.some((t) => t.role === 'reviewer')) {
     tasks.push({
       key: `t${tasks.length + 1}`,
       title: 'Review and integrate the results',
@@ -161,5 +212,5 @@ export function heuristicPlan(goal) {
       dependsOn: tasks.filter((t) => !tasks.some((o) => o.dependsOn.includes(t.key))).map((t) => t.key),
     });
   }
-  return { summary: `Built-in plan: ${tasks.length} tasks`, tasks, warnings: [] };
+  return { summary: `Built-in plan: ${tasks.length} tasks`, tasks, warnings };
 }

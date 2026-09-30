@@ -14,7 +14,7 @@ const mapRow = (r) =>
     goal: r.goal,
     orchestratorId: r.orchestrator_id,
     source: r.source,
-    status: r.status, // planning | draft | failed | applied | running | finished | discarded
+    status: r.status, // planning | draft | failed | discarded | applied | running | finished | incomplete
     plan: parseJson(r.plan, { summary: '', tasks: [], warnings: [] }),
     taskIds: parseJson(r.task_ids, []),
     summary: r.summary,
@@ -71,18 +71,31 @@ export function createOrchestrator({ db, bus, services, runner, runs, scheduler,
     return agents.filter((a) => a.role === 'orchestrator').sort((a, b) => b.tier - a.tier)[0] || [...agents].sort((a, b) => b.tier - a.tier)[0] || null;
   }
 
+  const planning = new Map(); // planId -> AbortController (background planning runs)
+  let closed = false; // set on shutdown: background planning must not touch the DB afterwards
+
   async function producePlan(plan, orchestrator) {
-    const project = services.projects.get(plan.projectId);
-    const agents = services.agents.list();
-    const run = runs.create({ projectId: project.id, agentId: orchestrator?.id, kind: 'orchestration', meta: { planId: plan.id, agentName: orchestrator?.name, taskTitle: `Plan: ${plan.goal.slice(0, 60)}` } });
-    let draft = null;
-    let source = 'heuristic';
+    const controller = new AbortController();
+    planning.set(plan.id, controller);
+    let run = null;
     const warnings = [];
+    // A plan discarded (or otherwise moved on) while the model was thinking must stay that way.
+    const stillPlanning = () => !closed && !controller.signal.aborted && store.get(plan.id).status === 'planning';
+    const current = () => (closed ? plan : store.get(plan.id));
     try {
+      const project = services.projects.get(plan.projectId);
+      const agents = services.agents.list();
+      run = runs.create({ projectId: project.id, agentId: orchestrator?.id, kind: 'orchestration', meta: { planId: plan.id, agentName: orchestrator?.name, taskTitle: `Plan: ${plan.goal.slice(0, 60)}` } });
+      let draft = null;
+      let source = 'heuristic';
       if (orchestrator && orchestrator.harness !== 'mock') {
         const prompt = buildPlanningPrompt({ goal: plan.goal, project, agents, existingTasks: services.tasks.list({ projectId: project.id }) });
         runs.log(run, 'system', `planning with ${orchestrator.name} (${orchestrator.harness}/${orchestrator.model || 'default'})\n`);
-        const res = await runner.runAgent({ agent: orchestrator, prompt, system: agentSystemPrompt(orchestrator), cwd: project.repoPath || undefined, run });
+        const res = await runner.runAgent({ agent: orchestrator, prompt, system: agentSystemPrompt(orchestrator), cwd: project.repoPath || undefined, run, signal: controller.signal });
+        if (!stillPlanning()) {
+          if (!closed) runs.finish(run.id, { status: 'cancelled', error: 'plan discarded' });
+          return current();
+        }
         if (res.code === 0 && Array.isArray(res.result?.tasks) && res.result.tasks.length) {
           draft = normalizePlan(res.result);
           source = 'agent';
@@ -98,11 +111,32 @@ export function createOrchestrator({ db, bus, services, runner, runs, scheduler,
       const final = { summary: draft.summary, tasks, warnings: [...warnings, ...draft.warnings] };
       runs.log(run, 'system', `plan ready: ${tasks.length} tasks (${source})\n${tasks.map((t) => `  - ${t.title} → ${t.agentName || 'unassigned'} [c${t.complexity}]`).join('\n')}\n`);
       runs.finish(run.id, { status: 'succeeded', meta: { tasks: tasks.length, source } });
+      if (!stillPlanning()) return current();
       return store.update(plan.id, { status: 'draft', source, plan: final });
     } catch (err) {
-      runs.log(run, 'stderr', `${err.message}\n`);
-      runs.finish(run.id, { status: 'failed', error: err.message });
+      if (closed) return plan;
+      if (run) {
+        runs.log(run, 'stderr', `${err.message}\n`);
+        runs.finish(run.id, { status: 'failed', error: err.message });
+      }
+      if (!stillPlanning()) return current();
       return store.update(plan.id, { status: 'failed', summary: err.message, plan: { summary: '', tasks: [], warnings: [...warnings, err.message] } });
+    } finally {
+      planning.delete(plan.id);
+    }
+  }
+
+  const TERMINAL = new Set(['done', 'failed', 'blocked']);
+
+  /** Marks running/applied plans finished once every one of their tasks is terminal. */
+  function closeFinishedPlans(projectId) {
+    for (const row of db.all("SELECT id FROM plans WHERE project_id = ? AND status IN ('running', 'applied')", [projectId])) {
+      const plan = store.get(row.id);
+      if (!plan.taskIds.length) continue;
+      const tasks = plan.taskIds.map((id) => db.get('SELECT status FROM tasks WHERE id = ?', [id])).filter(Boolean);
+      if (!tasks.every((t) => TERMINAL.has(t.status))) continue;
+      const clean = tasks.every((t) => t.status === 'done');
+      store.update(plan.id, { status: clean ? 'finished' : 'incomplete', summary: orchestrator.summarize(plan.id) });
     }
   }
 
@@ -134,7 +168,16 @@ export function createOrchestrator({ db, bus, services, runner, runs, scheduler,
       bus.publish('plan.created', { projectId, plan });
       producePlan(plan, agent)
         .then((ready) => (autoRun && ready.status === 'draft' ? orchestrator.run(ready.id, runOptions) : ready))
-        .catch(log);
+        .catch((err) => {
+          log(err);
+          // Surface auto-run failures on the plan instead of leaving a silent draft.
+          try {
+            const p = store.get(id);
+            store.update(id, { plan: { ...p.plan, warnings: [...(p.plan.warnings || []), `Auto-run failed: ${err.message}`] } });
+          } catch {
+            /* plan deleted */
+          }
+        });
       return plan;
     },
 
@@ -146,20 +189,35 @@ export function createOrchestrator({ db, bus, services, runner, runs, scheduler,
       const plan = store.get(planId);
       if (plan.status !== 'draft') throw conflict(`Plan is ${plan.status}, not a draft`);
       let tasks = plan.plan.tasks;
+      let warnings = plan.plan.warnings || [];
       if (edited) {
-        const normalized = normalizePlan({ tasks: edited });
-        const agentIds = new Map(edited.map((t) => [t.key, t.agentId]));
-        tasks = normalized.tasks.map((t) => {
-          const agentId = agentIds.get(t.key);
-          if (agentId) services.agents.get(agentId);
-          return { ...t, agentId: agentId || null };
-        });
-        const unassigned = tasks.filter((t) => !t.agentId);
-        if (unassigned.length) {
-          const filled = new Map(assignAgents(unassigned, services.agents.list()).map((t) => [t.key, t]));
-          tasks = tasks.map((t) => filled.get(t.key) || t);
+        // Keys identify tasks across edits, so they must be explicit and unique.
+        const keys = new Set();
+        for (const t of edited) {
+          if (!t || typeof t.key !== 'string' || !t.key.trim()) throw invalidParams('Every edited task needs a key');
+          if (keys.has(t.key)) throw invalidParams(`Duplicate task key: ${t.key}`);
+          if (typeof t.title !== 'string' || !t.title.trim()) throw invalidParams(`Task ${t.key} needs a title`);
+          if (t.agentId !== undefined && t.agentId !== null && typeof t.agentId !== 'string') throw invalidParams(`Task ${t.key}: agentId must be a string`);
+          keys.add(t.key);
         }
+        const normalized = normalizePlan({ tasks: edited });
+        warnings = [...warnings, ...normalized.warnings];
+        const original = new Map(plan.plan.tasks.map((t) => [t.key, t]));
+        const editedByKey = new Map(edited.map((t) => [t.key, t]));
+        tasks = normalized.tasks.map((t) => {
+          const before = original.get(t.key);
+          let agentId = editedByKey.get(t.key).agentId || null;
+          // Complexity changed but the agent was left as proposed: pick again for the new difficulty.
+          if (before && agentId === before.agentId && before.complexity !== t.complexity) agentId = null;
+          return { ...t, agentId, agentName: null, assignReason: agentId ? 'chosen by you' : '' };
+        });
+        const kept = new Map();
+        for (const t of tasks) if (t.agentId) kept.set(t.agentId, (kept.get(t.agentId) || 0) + 1);
+        const filled = new Map(assignAgents(tasks.filter((t) => !t.agentId), services.agents.list(), kept).map((t) => [t.key, t]));
+        tasks = tasks.map((t) => filled.get(t.key) || t);
       }
+      // Validate every assignee before writing anything (no half-created plans / phantom events).
+      for (const t of tasks) if (t.agentId) services.agents.get(t.agentId);
       const { order } = topoSort(
         tasks.map((t) => t.key),
         tasks.flatMap((t) => t.dependsOn.map((d) => ({ from: d, to: t.key }))),
@@ -185,25 +243,48 @@ export function createOrchestrator({ db, bus, services, runner, runs, scheduler,
         }
         return order.map((k) => keyToId.get(k));
       });
-      return store.update(planId, { status: 'applied', taskIds: ids, plan: { ...plan.plan, tasks } });
+      return store.update(planId, { status: 'applied', taskIds: ids, plan: { ...plan.plan, tasks, warnings } });
     },
 
-    /** Applies (if needed) and starts the autonomous scheduler for the plan's project. */
-    run(planId, { concurrency = 2, reviewPolicy = 'auto-approve', tasks } = {}) {
+    /**
+     * Applies (if needed) and runs the plan's tasks to completion. The scheduler
+     * session is scoped to the plan's tasks, so unrelated cards on the board are
+     * not executed. If a session is already live the tasks join it (its options win).
+     */
+    run(planId, { concurrency = 2, reviewPolicy = 'wait', tasks } = {}) {
       let plan = store.get(planId);
       if (plan.status === 'draft') plan = orchestrator.apply(planId, { tasks });
-      if (plan.status !== 'applied') throw conflict(`Plan is ${plan.status}`);
-      const current = scheduler.status(plan.projectId);
-      if (current.state !== 'running' && current.state !== 'waiting') {
-        scheduler.start(plan.projectId, { concurrency, reviewPolicy, includeBacklog: false });
+      if (!['applied', 'running', 'incomplete'].includes(plan.status)) throw conflict(`Plan is ${plan.status}`);
+      const warnings = [...(plan.plan.warnings || [])];
+      if (scheduler.extend(plan.projectId, plan.taskIds)) {
+        const live = scheduler.status(plan.projectId);
+        if (live.options?.reviewPolicy !== reviewPolicy || live.options?.concurrency !== concurrency) {
+          warnings.push(`Joined the running scheduler, which uses review policy "${live.options?.reviewPolicy}" and ${live.options?.concurrency} parallel agents`);
+        }
+      } else {
+        scheduler.start(plan.projectId, { concurrency, reviewPolicy, includeBacklog: false, taskIds: plan.taskIds });
       }
-      return store.update(planId, { status: 'running' });
+      return store.update(planId, { status: 'running', plan: { ...plan.plan, warnings } });
     },
 
     discard(planId) {
       const plan = store.get(planId);
       if (!['draft', 'failed', 'planning'].includes(plan.status)) throw conflict(`Cannot discard a ${plan.status} plan`);
+      planning.get(planId)?.abort(); // stop the planning model too
       return store.update(planId, { status: 'discarded' });
+    },
+
+    /** Startup: plans whose planning was cut off by a restart can never finish. */
+    recoverInterrupted() {
+      for (const row of db.all("SELECT id FROM plans WHERE status = 'planning'")) {
+        store.update(row.id, { status: 'failed', summary: 'Planning was interrupted by a server restart' });
+      }
+    },
+
+    /** Shutdown: abort background planning runs. */
+    abortAll() {
+      closed = true;
+      for (const c of planning.values()) c.abort();
     },
 
     /** Summarises a finished plan from its tasks' outcomes. */
@@ -222,13 +303,11 @@ export function createOrchestrator({ db, bus, services, runner, runs, scheduler,
     },
   };
 
-  // Close running plans when their project's scheduler finishes or stops.
+  // A plan is finished when all of its tasks are — however they were run (plan run, Run all, manual).
   bus.subscribe((e) => {
-    if (e.type !== 'scheduler.finished' && e.type !== 'scheduler.stopped') return;
-    for (const plan of db.all("SELECT id FROM plans WHERE project_id = ? AND status = 'running'", [e.payload.projectId])) {
+    if ((e.type === 'task.updated' || e.type === 'task.deleted') && e.payload.projectId) {
       try {
-        const summary = orchestrator.summarize(plan.id);
-        store.update(plan.id, { status: e.type === 'scheduler.finished' ? 'finished' : 'applied', summary });
+        closeFinishedPlans(e.payload.projectId);
       } catch (err) {
         log(err);
       }
@@ -241,7 +320,7 @@ export function createOrchestrator({ db, bus, services, runner, runs, scheduler,
 export function registerOrchestratorRpc(rpc, orchestrator) {
   const runOptions = (p) => ({
     concurrency: check.number(p, 'concurrency', { optional: true, min: 1, max: 16, integer: true }) ?? 2,
-    reviewPolicy: check.oneOf(p, 'reviewPolicy', REVIEW_POLICIES, { optional: true }) ?? 'auto-approve',
+    reviewPolicy: check.oneOf(p, 'reviewPolicy', REVIEW_POLICIES, { optional: true }) ?? 'wait',
   });
   const editedTasks = (p) => {
     if (p.tasks === undefined) return undefined;
