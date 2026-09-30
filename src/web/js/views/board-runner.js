@@ -105,51 +105,73 @@ registerBoardExtension({
     return null;
   },
 
-  drawerSection(task, data, ctx) {
-    const runsBox = h('div', { class: 'runs-list' }, h('p', { class: 'muted small' }, 'Loading runs…'));
+  /** Self-refreshing Execution section: follows the task's status and switches the log to each new run. */
+  drawerSection(initialTask, data, ctx) {
+    const section = h('div', { class: 'section' });
+    const runsBox = h('div', { class: 'runs-list' });
     const logsBox = h('div');
-    ctx
-      .rpc('runs.list', { taskId: task.id, limit: 10 })
-      .then((runs) => {
-        runsBox.replaceChildren(
-          ...(runs.length
-            ? runs.map((r) =>
-                h(
-                  'button',
-                  { class: 'run-row', onClick: () => logsBox.replaceChildren(logViewer(ctx, r.id)) },
-                  h('span', { class: `dot run-${r.status}` }),
-                  `#${r.attempt} ${r.meta.agentName || ''}`,
-                  h('span', { class: 'muted' }, ` ${r.status} · ${timeAgo(r.startedAt)}`),
-                ),
-              )
-            : [h('p', { class: 'muted small' }, 'Not run yet.')]),
-        );
-        if (runs[0]) logsBox.replaceChildren(logViewer(ctx, runs[0].id));
-      })
-      .catch(ctx.showError);
+    let viewing = null;
+    let attached = false;
+    setTimeout(() => (attached = true), 0);
 
     const act = (method, params, message) => () =>
       ctx
         .rpc(method, params)
         .then(() => message && toast(message, 'success'))
         .catch(ctx.showError);
-    return h(
-      'div',
-      { class: 'section' },
-      h('h4', {}, 'Execution'),
-      h(
-        'div',
-        { class: 'run-actions' },
-        task.status === 'running'
-          ? h('button', { class: 'btn danger', onClick: act('tasks.cancel', { taskId: task.id }, 'Cancelling…') }, '■ Cancel')
-          : h('button', { class: 'btn success', onClick: act('tasks.run', { taskId: task.id }, 'Started') }, '▶ Run now'),
-        ['failed', 'blocked', 'done', 'review'].includes(task.status) && h('button', { class: 'btn', onClick: act('tasks.retry', { taskId: task.id }, 'Queued in To do') }, '↻ Re-queue'),
-        task.branch && h('span', { class: 'muted small', title: task.worktreePath || '' }, `⎇ ${task.branch}`),
-      ),
-      task.error && h('pre', { class: 'preview-block error-block' }, task.error),
-      task.result && h('details', { open: true }, h('summary', {}, 'Result'), h('pre', { class: 'preview-block' }, JSON.stringify(task.result, null, 2))),
-      task.output && h('details', {}, h('summary', {}, `Output (${task.output.length} chars)`), h('pre', { class: 'preview-block' }, task.output)),
-      h('details', { open: true }, h('summary', {}, 'Runs & live log'), runsBox, logsBox),
-    );
+
+    const view = (runId) => {
+      if (viewing === runId) return;
+      viewing = runId;
+      logsBox.replaceChildren(logViewer(ctx, runId));
+    };
+
+    function render(task, runs) {
+      runsBox.replaceChildren(
+        ...(runs.length
+          ? runs.map((r) =>
+              h(
+                'button',
+                { class: ['run-row', r.id === viewing && 'active'], onClick: () => view(r.id) },
+                h('span', { class: `dot run-${r.status}` }),
+                `#${r.attempt} ${r.meta.agentName || ''}`,
+                h('span', { class: 'muted' }, ` ${r.status} · ${timeAgo(r.startedAt)}`),
+              ),
+            )
+          : [h('p', { class: 'muted small' }, 'Not run yet.')]),
+      );
+      section.replaceChildren(
+        h('h4', {}, 'Execution'),
+        h(
+          'div',
+          { class: 'run-actions' },
+          task.status === 'running'
+            ? h('button', { class: 'btn danger', onClick: act('tasks.cancel', { taskId: task.id }, 'Cancelling…') }, '■ Cancel')
+            : h('button', { class: 'btn success', onClick: act('tasks.run', { taskId: task.id }, 'Started') }, '▶ Run now'),
+          ['failed', 'blocked', 'done', 'review'].includes(task.status) && h('button', { class: 'btn', onClick: act('tasks.retry', { taskId: task.id }, 'Queued in To do') }, '↻ Re-queue'),
+          task.branch && h('span', { class: 'muted small', title: task.worktreePath || '' }, `⎇ ${task.branch}`),
+        ),
+        task.error && h('pre', { class: 'preview-block error-block' }, task.error),
+        task.result && h('details', { open: true }, h('summary', {}, 'Result'), h('pre', { class: 'preview-block' }, JSON.stringify(task.result, null, 2))),
+        task.output && h('details', {}, h('summary', {}, `Output (${task.output.length} chars)`), h('pre', { class: 'preview-block' }, task.output)),
+        h('details', { open: true }, h('summary', {}, 'Runs & live log'), runsBox, logsBox),
+      );
+    }
+
+    async function refresh() {
+      const [task, runs] = await Promise.all([ctx.rpc('tasks.get', { id: initialTask.id }), ctx.rpc('runs.list', { taskId: initialTask.id, limit: 10 })]);
+      if (runs[0] && (viewing === null || runs[0].status === 'running')) view(runs[0].id);
+      render(task, runs);
+    }
+
+    render(initialTask, []);
+    refresh().catch(ctx.showError);
+    const off = ctx.onEvent((e) => {
+      if (attached && !section.isConnected) return off();
+      const p = e.payload || {};
+      const mine = p.task?.id === initialTask.id || p.run?.taskId === initialTask.id;
+      if (mine && (e.type === 'task.updated' || e.type === 'run.started' || e.type === 'run.finished')) refresh().catch(ctx.showError);
+    });
+    return section;
   },
 });

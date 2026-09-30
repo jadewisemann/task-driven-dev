@@ -1,14 +1,16 @@
 const sleep = (ms, signal) =>
   new Promise((resolve, reject) => {
-    const t = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(t);
-        reject(Object.assign(new Error('cancelled'), { cancelled: true }));
-      },
-      { once: true },
-    );
+    const cancelled = () => reject(Object.assign(new Error('cancelled'), { cancelled: true }));
+    if (signal?.aborted) return cancelled();
+    const onAbort = () => {
+      clearTimeout(t);
+      cancelled();
+    };
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 
 /**

@@ -24,9 +24,14 @@ export function parseResult(output = '') {
   return null;
 }
 
-/** Maps an agent-reported status onto a board status. */
-export function boardStatusFor(result, exitOk) {
+/**
+ * Maps an agent-reported status onto a board status. When the output was
+ * truncated and no result block survived, we can't know the outcome, so a
+ * human (or reviewer agent) should look: 'review'.
+ */
+export function boardStatusFor(result, exitOk, { truncated = false } = {}) {
   if (!exitOk) return 'failed';
+  if (!result && truncated) return 'review';
   switch (result?.status) {
     case 'failed':
     case 'error':

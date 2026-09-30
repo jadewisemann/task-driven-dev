@@ -12,20 +12,20 @@ export const runsView = {
     const list = h('div', { class: 'runs-sidebar' });
     const detail = h('div', { class: 'runs-detail' }, h('div', { class: 'empty' }, 'Select a run'));
 
+    const header = h('div', { class: 'run-head' });
+    function renderHeader(run) {
+      mountInto(
+        header,
+        h('h3', {}, run.kind === 'task' ? run.meta.taskTitle || `Task #${shortId(run.taskId)}` : `${run.kind} run`),
+        h('div', { class: 'muted small' }, `${run.meta.agentName || ''} · ${run.status} · attempt ${run.attempt} · started ${timeAgo(run.startedAt)}`),
+        run.command && h('pre', { class: 'preview-block' }, run.command),
+      );
+    }
     function select(run) {
       selected = run.id;
       for (const el of list.children) el.classList.toggle('active', el.dataset.id === run.id);
-      mountInto(
-        detail,
-        h(
-          'div',
-          { class: 'run-head' },
-          h('h3', {}, run.kind === 'task' ? run.meta.taskTitle || `Task #${shortId(run.taskId)}` : `${run.kind} run`),
-          h('div', { class: 'muted small' }, `${run.meta.agentName || ''} · ${run.status} · attempt ${run.attempt} · started ${timeAgo(run.startedAt)}`),
-          run.command && h('pre', { class: 'preview-block' }, run.command),
-        ),
-        logViewer(ctx, run.id, { height: 600 }),
-      );
+      renderHeader(run);
+      mountInto(detail, header, logViewer(ctx, run.id, { height: 600 }));
     }
 
     async function load() {
@@ -45,7 +45,9 @@ export const runsView = {
           );
         }),
       );
-      if (!selected && runs[0]) select(runs[0]);
+      const current = runs.find((r) => r.id === selected);
+      if (current) renderHeader(current); // keep the log console, refresh status
+      else if (runs[0]) select(runs[0]);
     }
     const reload = debounce(() => load().catch(ctx.showError), 150);
     mountInto(root, h('div', { class: 'toolbar' }, h('div', { class: 'toolbar-title' }, h('h2', {}, 'Runs'), h('span', { class: 'muted' }, 'Every agent execution with its live log'))), h('div', { class: 'runs-layout' }, list, detail));

@@ -4,6 +4,9 @@ import { ABORT_STOP } from './runner.js';
 
 export const REVIEW_POLICIES = ['wait', 'auto-approve'];
 const TERMINAL = new Set(['done', 'failed', 'blocked']);
+const INTERNAL = { internal: true };
+/** Prefix of errors written when the scheduler blocks a task; only those are auto-released. */
+const BLOCKED_PREFIX = 'Blocked:';
 
 /**
  * Autonomous dependency-driven scheduler, one session per project.
@@ -54,8 +57,9 @@ export function createScheduler({ bus, services, runner, log = console.error }) 
   function blockSuccessors(s, taskId, edges, byId) {
     for (const id of descendants(edges, taskId)) {
       const t = byId.get(id);
-      if (t && t.status !== 'done' && t.status !== 'blocked' && !s.active.has(id)) {
-        services.tasks.update(id, { status: 'blocked', error: `Blocked: predecessor "${byId.get(taskId)?.title || taskId}" failed` });
+      // Backlog cards are not scheduled, so they are left alone (and never promoted on release).
+      if (t && !['done', 'blocked', 'backlog'].includes(t.status) && !s.active.has(id) && !runner.isTaskActive(id)) {
+        services.tasks.update(id, { status: 'blocked', error: `${BLOCKED_PREFIX} predecessor "${byId.get(taskId)?.title || taskId}" failed` }, INTERNAL);
       }
     }
   }
@@ -70,7 +74,7 @@ export function createScheduler({ bus, services, runner, log = console.error }) 
       if (used < allowed) {
         s.retries.set(task.id, used + 1);
         s.stats.retried++;
-        services.tasks.update(task.id, { status: 'todo' });
+        services.tasks.update(task.id, { status: 'todo' }, INTERNAL);
       } else {
         s.stats.failed++;
         const edges = services.tasks.edges(s.projectId);
@@ -79,7 +83,7 @@ export function createScheduler({ bus, services, runner, log = console.error }) 
       }
     } else if (outcome === 'review') {
       if (s.options.reviewPolicy === 'auto-approve') {
-        services.tasks.update(task.id, { status: 'done' });
+        services.tasks.update(task.id, { status: 'done' }, INTERNAL);
         s.stats.succeeded++;
       } else s.stats.review++;
     } else if (outcome === 'done') {
@@ -108,9 +112,11 @@ export function createScheduler({ bus, services, runner, log = console.error }) 
     for (const t of tasks) {
       const upstream = ancestors(edges, t.id);
       const failedUpstream = upstream.some((id) => byId.get(id)?.status === 'failed');
-      if (t.status === 'blocked' && !failedUpstream) services.tasks.update(t.id, { status: 'todo', error: null });
-      else if (t.status === 'todo' && failedUpstream && !s.active.has(t.id)) {
-        services.tasks.update(t.id, { status: 'blocked', error: 'Blocked: a predecessor failed' });
+      // Only release cards the scheduler blocked itself; a card the user parked in Blocked stays there.
+      if (t.status === 'blocked' && !failedUpstream && (t.error || '').startsWith(BLOCKED_PREFIX)) {
+        services.tasks.update(t.id, { status: 'todo', error: null }, INTERNAL);
+      } else if (t.status === 'todo' && failedUpstream && !s.active.has(t.id) && !runner.isTaskActive(t.id)) {
+        services.tasks.update(t.id, { status: 'blocked', error: `${BLOCKED_PREFIX} a predecessor failed` }, INTERNAL);
       }
     }
     const current = services.tasks.list({ projectId: s.projectId });
@@ -124,7 +130,8 @@ export function createScheduler({ bus, services, runner, log = console.error }) 
     const runnable = ready.filter((t) => !unassigned.includes(t));
 
     for (const t of runnable) {
-      if (s.active.size >= s.options.concurrency) break;
+      // Manual "Run now" runs in this project count toward the limit too.
+      if (Math.max(s.active.size, runner.activeCount(s.projectId)) >= s.options.concurrency) break;
       const promise = runner
         .executeTask(t.id)
         .then((res) => onFinished(s, res))
@@ -140,7 +147,7 @@ export function createScheduler({ bus, services, runner, log = console.error }) 
     const open = current.filter((t) => !TERMINAL.has(t.status) && t.status !== 'backlog');
     let state = 'running';
     let reason = null;
-    if (s.active.size === 0) {
+    if (s.active.size === 0 && runner.activeCount(s.projectId) === 0) {
       if (open.length === 0) {
         state = 'finished';
       } else if (open.some((t) => t.status === 'review')) {
@@ -182,7 +189,7 @@ export function createScheduler({ bus, services, runner, log = console.error }) 
       const existing = sessions.get(projectId);
       if (existing && !existing.closed) throw conflict('Scheduler is already running for this project');
       if (includeBacklog) {
-        for (const t of services.tasks.list({ projectId, status: 'backlog' })) services.tasks.update(t.id, { status: 'todo' });
+        for (const t of services.tasks.list({ projectId, status: 'backlog' })) services.tasks.update(t.id, { status: 'todo' }, INTERNAL);
       }
       const s = {
         projectId,

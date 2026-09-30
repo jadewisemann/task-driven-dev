@@ -42,13 +42,19 @@ export const branchFor = (task) => `todo-devs/${task.id.split('_')[1]}-${slugify
  *
  * @returns {Promise<{path: string, branch: string, merged: string[], conflicts: string[]}>}
  */
-export function ensureWorktree({ repoPath, root, task, baseRef = 'HEAD', upstreamBranches = [], log = () => {} }) {
+export function ensureWorktree({ repoPath, root, task, baseRef = 'HEAD', upstreamBranches = [], clean = false, log = () => {} }) {
   return withRepoLock(repoPath, async () => {
-    const branch = branchFor(task);
-    const path = join(root, task.id);
+    // The branch is fixed at first run; renaming the task later must not orphan its work.
+    const branch = task.branch || branchFor(task);
+    const path = task.worktreePath || join(root, task.id);
     mkdirSync(root, { recursive: true });
     if (existsSync(join(path, '.git'))) {
       log(`reusing worktree ${path} (${branch})`);
+      if (clean) {
+        await git(path, ['reset', '--hard', '-q']);
+        await git(path, ['clean', '-fdq']);
+        log('discarded uncommitted changes from the previous attempt');
+      }
     } else {
       const exists = (await git(repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], { allowFail: true })).ok;
       await git(repoPath, ['worktree', 'prune'], { allowFail: true });
@@ -60,7 +66,11 @@ export function ensureWorktree({ repoPath, root, task, baseRef = 'HEAD', upstrea
     const conflicts = [];
     for (const upstream of upstreamBranches) {
       const known = (await git(repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${upstream}`], { allowFail: true })).ok;
-      if (!known) continue;
+      if (!known) {
+        conflicts.push(upstream);
+        log(`WARNING: predecessor branch ${upstream} not found — its work is not included`);
+        continue;
+      }
       const res = await git(path, ['merge', '--no-edit', '--no-ff', '-m', `todo-devs: merge ${upstream}`, upstream], { allowFail: true });
       if (res.ok) {
         merged.push(upstream);
@@ -81,7 +91,10 @@ export function commitAll({ repoPath, path, message }) {
     await git(path, ['add', '-A']);
     const status = await git(path, ['status', '--porcelain']);
     if (!status.out) return null;
-    await git(path, ['-c', 'user.name=todo-devs', '-c', 'user.email=todo-devs@localhost', 'commit', '-q', '-m', message]);
+    // Use the user's git identity when configured; fall back to a bot identity.
+    const hasIdentity = (await git(path, ['config', 'user.email'], { allowFail: true })).out !== '';
+    const identity = hasIdentity ? [] : ['-c', 'user.name=todo-devs', '-c', 'user.email=todo-devs@localhost'];
+    await git(path, [...identity, 'commit', '-q', '-m', message]);
     return (await git(path, ['rev-parse', 'HEAD'])).out;
   });
 }

@@ -41,7 +41,7 @@ export function createApp(options = {}) {
 
   const services = { projects, tasks, agents };
   const runs = createRunStore({ db, bus });
-  const runner = createRunner({ bus, services, runs, home });
+  const runner = createRunner({ bus, services, runs, home, log });
   const scheduler = createScheduler({ bus, services, runner, log });
   if (options.recover) runner.recoverInterrupted();
 
@@ -61,6 +61,7 @@ export function createApp(options = {}) {
       async () => {
         scheduler.stopAll();
         await runner.cancelAll();
+        runs.close(); // late output from runs that outlived the wait is dropped, never written to a closed DB
       },
     ],
 
