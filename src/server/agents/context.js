@@ -22,6 +22,11 @@ export const RESULT_CONTRACT = [
   'Use "status": "needs_review" when a human should check the work, or "failed" if you could not complete it.',
 ].join('\n');
 
+/** Persona-based system prompt for an agent used outside a task (workflow nodes, orchestrator). */
+export function agentSystemPrompt(agent) {
+  return [`You are "${agent.name}", acting as the team's ${agent.role}.`, agent.persona.trim()].filter(Boolean).join('\n\n');
+}
+
 const truncate = (text, max) => (text && text.length > max ? `${text.slice(0, max)}\n… [truncated ${text.length - max} chars]` : text || '');
 
 /**

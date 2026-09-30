@@ -12,6 +12,7 @@ import { createRunStore } from './runtime/runs.js';
 import { createRunner } from './runtime/runner.js';
 import { createScheduler } from './runtime/scheduler.js';
 import { registerRuntimeRpc } from './runtime/rpc.js';
+import { createWorkflowRunner, createWorkflowService, registerWorkflowRpc } from './domain/workflows.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
 
@@ -39,10 +40,14 @@ export function createApp(options = {}) {
   projects.ensureDefault();
   agents.seedStarterTeam();
 
-  const services = { projects, tasks, agents };
+  const workflows = createWorkflowService({ db, bus });
+  const services = { projects, tasks, agents, workflows };
   const runs = createRunStore({ db, bus });
   const runner = createRunner({ bus, services, runs, home, log });
   const scheduler = createScheduler({ bus, services, runner, log });
+  const wfRunner = createWorkflowRunner({ bus, services, runner, runs, home, log });
+  runner.agentGraphExecutor = wfRunner.executeAgentGraph;
+  runner.onCancelRun = wfRunner.cancel; // runs.cancel also reaches standalone workflow runs
   if (options.recover) runner.recoverInterrupted();
 
   const app = {
@@ -56,11 +61,12 @@ export function createApp(options = {}) {
     runs,
     runner,
     scheduler,
+    wfRunner,
     /** Hooks run on shutdown (child processes, remote connections, timers). */
     disposers: [
       async () => {
         scheduler.stopAll();
-        await runner.cancelAll();
+        await Promise.all([runner.cancelAll(), wfRunner.cancelAll()]);
         runs.close(); // late output from runs that outlived the wait is dropped, never written to a closed DB
       },
     ],
@@ -98,6 +104,7 @@ export function createApp(options = {}) {
   registerTaskRpc(rpc, tasks, projects);
   registerAgentRpc(rpc, { agents, tasks, projects });
   registerRuntimeRpc(rpc, { runner, scheduler, runs, services, log });
+  registerWorkflowRpc(rpc, { workflows, wfRunner, services });
 
   return app;
 }
