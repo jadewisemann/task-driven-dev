@@ -46,4 +46,25 @@ export const migrations = [
       CREATE INDEX idx_task_deps_depends_on ON task_deps(depends_on);
     `,
   },
+  {
+    id: '002_agents',
+    up: `
+      CREATE TABLE agents (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'generalist',
+        persona TEXT NOT NULL DEFAULT '',
+        harness TEXT NOT NULL,
+        model TEXT NOT NULL DEFAULT '',
+        effort TEXT NOT NULL DEFAULT 'medium',
+        tier INTEGER NOT NULL DEFAULT 2,
+        color TEXT NOT NULL DEFAULT '#7c5cff',
+        config TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_tasks_assignee ON tasks(assignee_id);
+      CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+    `,
+  },
 ];
