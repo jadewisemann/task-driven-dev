@@ -116,4 +116,23 @@ export const migrations = [
       CREATE INDEX idx_workflows_project ON workflows(project_id);
     `,
   },
+  {
+    id: '005_plans',
+    up: `
+      CREATE TABLE plans (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        goal TEXT NOT NULL,
+        orchestrator_id TEXT,
+        source TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft',
+        plan TEXT NOT NULL,
+        task_ids TEXT,
+        summary TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_plans_project ON plans(project_id, created_at);
+    `,
+  },
 ];
