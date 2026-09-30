@@ -67,28 +67,33 @@ export class Database {
    * @returns {T}
    */
   tx(fn) {
-    if (this.txDepth > 0) return fn();
-    this.raw.exec('BEGIN IMMEDIATE');
+    const depth = this.txDepth;
+    const savepoint = `sp_${depth}`;
+    this.raw.exec(depth === 0 ? 'BEGIN IMMEDIATE' : `SAVEPOINT ${savepoint}`);
     this.txDepth++;
     try {
       const result = fn();
-      this.txDepth--;
-      this.raw.exec('COMMIT');
+      if (result && typeof result.then === 'function') {
+        throw new Error('db.tx() callbacks must be synchronous');
+      }
+      this.raw.exec(depth === 0 ? 'COMMIT' : `RELEASE ${savepoint}`);
       return result;
     } catch (err) {
-      this.txDepth--;
-      this.raw.exec('ROLLBACK');
+      if (depth === 0) this.raw.exec('ROLLBACK');
+      else this.raw.exec(`ROLLBACK TO ${savepoint}; RELEASE ${savepoint}`);
       throw err;
+    } finally {
+      this.txDepth = depth;
     }
   }
 
-  /** @param {{id: string, up: string}[]} migrations applied in order, each once */
+  /** @param {{id: string, up: string}[]} migrations applied in order, each once (safe across processes) */
   migrate(migrations) {
     this.exec('CREATE TABLE IF NOT EXISTS schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)');
-    const applied = new Set(this.all('SELECT id FROM schema_migrations').map((r) => r.id));
     for (const m of migrations) {
-      if (applied.has(m.id)) continue;
       this.tx(() => {
+        // Re-checked inside the write lock so two processes booting together don't both apply it.
+        if (this.get('SELECT 1 AS ok FROM schema_migrations WHERE id = ?', [m.id])) return;
         this.exec(m.up);
         this.run('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)', [m.id, new Date().toISOString()]);
       });

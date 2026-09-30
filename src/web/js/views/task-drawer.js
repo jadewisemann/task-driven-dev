@@ -39,9 +39,9 @@ export function openTaskDrawer(task, { ctx, board, extensions, reload }) {
   });
   const dependents = board.tasks.filter((t) => t.dependsOn.includes(task.id));
 
+  /** Sends only the fields the user changed so concurrent runner updates (status, output) survive. */
   async function save() {
-    await ctx.rpc('tasks.update', {
-      id: task.id,
+    const next = {
       title: f.title.value,
       description: f.description.value,
       status: f.status.value,
@@ -49,8 +49,16 @@ export function openTaskDrawer(task, { ctx, board, extensions, reload }) {
       complexity: Number(f.complexity.value),
       labels: f.labels.value.split(',').map((s) => s.trim()).filter(Boolean),
       dependsOn: [...selected],
-    });
-    toast('Task saved', 'success');
+    };
+    const patch = {};
+    for (const [key, value] of Object.entries(next)) {
+      if (JSON.stringify(value) !== JSON.stringify(task[key])) patch[key] = value;
+    }
+    for (const ext of extensions) Object.assign(patch, ext.drawerPatch?.(task) || {});
+    if (Object.keys(patch).length) {
+      await ctx.rpc('tasks.update', { id: task.id, ...patch });
+      toast('Task saved', 'success');
+    }
     drawer.close();
   }
 

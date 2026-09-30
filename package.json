@@ -8,7 +8,7 @@
     "todo-devs": "bin/todo-devs.js"
   },
   "engines": {
-    "node": ">=22.5"
+    "node": ">=22.13"
   },
   "scripts": {
     "start": "node bin/todo-devs.js serve",

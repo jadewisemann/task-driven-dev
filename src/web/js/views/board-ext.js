@@ -11,6 +11,7 @@
  *   cardFooter?(task, data, ctx) => Node,       // rendered at the bottom of each card
  *   onCardDrop?(task, dataTransfer, ctx) => boolean|Promise<boolean>, // handle custom drops on a card
  *   drawerSection?(task, data, ctx, reload) => Node, // rendered inside the task drawer
+ *   drawerPatch?(task) => object,               // extra changed fields merged into the drawer's save
  * }
  */
 export const boardExtensions = [];

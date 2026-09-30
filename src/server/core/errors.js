@@ -60,13 +60,14 @@ export const check = {
     if (!allowEmpty && value.trim() === '') throw invalidParams(`"${key}" must not be empty`);
     return value;
   },
-  number(params, key, { optional = false, min = -Infinity, max = Infinity } = {}) {
+  number(params, key, { optional = false, min = -Infinity, max = Infinity, integer = false } = {}) {
     const value = params[key];
     if (value === undefined || value === null) {
       if (optional) return undefined;
       throw invalidParams(`"${key}" is required`);
     }
-    if (typeof value !== 'number' || Number.isNaN(value)) throw invalidParams(`"${key}" must be a number`);
+    if (typeof value !== 'number' || !Number.isFinite(value)) throw invalidParams(`"${key}" must be a finite number`);
+    if (integer && !Number.isInteger(value)) throw invalidParams(`"${key}" must be an integer`);
     if (value < min || value > max) throw invalidParams(`"${key}" must be between ${min} and ${max}`);
     return value;
   },

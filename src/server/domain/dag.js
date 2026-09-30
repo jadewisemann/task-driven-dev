@@ -49,8 +49,8 @@ export function topoSort(nodeIds, edges) {
     }
   }
   const order = [];
-  while (queue.length) {
-    const id = queue.shift();
+  for (let head = 0; head < queue.length; head++) {
+    const id = queue[head];
     order.push(id);
     for (const next of adj.get(id) || []) {
       levels[next] = Math.max(levels[next] ?? 0, levels[id] + 1);
@@ -58,7 +58,8 @@ export function topoSort(nodeIds, edges) {
       if (indegree.get(next) === 0) queue.push(next);
     }
   }
-  const cycle = [...ids].filter((id) => !order.includes(id));
+  const ordered = new Set(order);
+  const cycle = [...ids].filter((id) => !ordered.has(id));
   return { order, levels, cycle };
 }
 

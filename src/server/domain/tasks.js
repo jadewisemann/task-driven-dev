@@ -89,6 +89,14 @@ export function createTaskService({ db, bus }) {
     for (const dep of dependsOn) db.run('INSERT INTO task_deps (task_id, depends_on) VALUES (?, ?)', [taskId, dep]);
   }
 
+  /** Drag-and-drop uses midpoints; renumber a column once two positions get too close. */
+  function rebalanceIfCrowded(projectId, status) {
+    const rows = db.all('SELECT id, position FROM tasks WHERE project_id = ? AND status = ? ORDER BY position, created_at', [projectId, status]);
+    const crowded = rows.some((r, i) => i > 0 && r.position - rows[i - 1].position < 1e-6);
+    if (!crowded) return;
+    rows.forEach((r, i) => db.run('UPDATE tasks SET position = ? WHERE id = ?', [i + 1, r.id]));
+  }
+
   function nextPosition(projectId, status) {
     const row = db.get('SELECT MAX(position) AS p FROM tasks WHERE project_id = ? AND status = ?', [projectId, status]);
     return (row?.p ?? 0) + 1;
@@ -182,6 +190,7 @@ export function createTaskService({ db, bus }) {
           db.run(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`, params);
         }
         if (patch.dependsOn) writeDependencies(id, assertDependencies(current, patch.dependsOn));
+        if (patch.position !== undefined) rebalanceIfCrowded(current.projectId, patch.status || current.status);
         return svc.get(id);
       });
       publish('task.updated', task, { previousStatus: current.status, changes: Object.keys(patch) });
@@ -199,11 +208,14 @@ export function createTaskService({ db, bus }) {
       return svc.update(taskId, { dependsOn: task.dependsOn.filter((d) => d !== dependsOn) });
     },
 
+    /** Deletes a task. Dependents lose that edge, so they are re-published as updated. */
     delete(id) {
       const task = svc.get(id);
+      const dependents = db.all('SELECT task_id FROM task_deps WHERE depends_on = ?', [id]).map((r) => r.task_id);
       db.run('DELETE FROM tasks WHERE id = ?', [id]);
-      bus.publish('task.deleted', { projectId: task.projectId, taskId: id });
-      return { ok: true };
+      bus.publish('task.deleted', { projectId: task.projectId, taskId: id, affectedTaskIds: dependents });
+      for (const depId of dependents) publish('task.updated', svc.get(depId), { changes: ['dependsOn'] });
+      return { ok: true, affectedTaskIds: dependents };
     },
 
     /** Tasks + edges + topological levels for flow views. */
@@ -226,8 +238,8 @@ export function registerTaskRpc(rpc, tasks, projects) {
     if (p.title !== undefined) patch.title = check.string(p, 'title');
     if (p.description !== undefined) patch.description = check.string(p, 'description', { allowEmpty: true });
     if (p.status !== undefined) patch.status = check.oneOf(p, 'status', TASK_STATUSES);
-    if (p.priority !== undefined) patch.priority = check.number(p, 'priority', { min: 0, max: 3 });
-    if (p.complexity !== undefined) patch.complexity = check.number(p, 'complexity', { min: 1, max: 5 });
+    if (p.priority !== undefined) patch.priority = check.number(p, 'priority', { min: 0, max: 3, integer: true });
+    if (p.complexity !== undefined) patch.complexity = check.number(p, 'complexity', { min: 1, max: 5, integer: true });
     if (p.position !== undefined) patch.position = check.number(p, 'position');
     if (p.assigneeId !== undefined) patch.assigneeId = p.assigneeId === null ? null : check.string(p, 'assigneeId');
     if (p.labels !== undefined) patch.labels = check.stringArray(p, 'labels');

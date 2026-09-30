@@ -14,7 +14,8 @@ const daemonFile = (home) => join(home, 'daemon.json');
 
 /** Records the running server so CLI / SSH bridges can find it. */
 export function writeDaemonInfo(home, info) {
-  writeFileSync(daemonFile(home), JSON.stringify({ ...info, pid: process.pid, startedAt: new Date().toISOString() }, null, 2));
+  // May contain the access token: readable by the owner only.
+  writeFileSync(daemonFile(home), JSON.stringify({ ...info, pid: process.pid, startedAt: new Date().toISOString() }, null, 2), { mode: 0o600 });
 }
 
 export function readDaemonInfo(home) {

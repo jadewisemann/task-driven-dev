@@ -121,7 +121,14 @@ async function boot() {
     showError(err);
   }
   onEvent((e) => {
-    if (e.type.startsWith('project.')) loadProjects().catch(showError);
+    if (!e.type.startsWith('project.') && e.type !== 'sync.reconnected') return;
+    const before = JSON.stringify(currentProject());
+    loadProjects()
+      .then(() => {
+        // Remount when the active project was renamed, edited or deleted.
+        if (JSON.stringify(currentProject()) !== before) mountView();
+      })
+      .catch(showError);
   });
   onPeerChange(async () => {
     try {

@@ -162,7 +162,7 @@ export const boardView = {
       );
     }
 
-    const prefixes = ['task.', ...boardExtensions.flatMap((e) => e.events || [])];
+    const prefixes = ['task.', 'sync.', ...boardExtensions.flatMap((e) => e.events || [])];
     const off = ctx.onEvent((e) => {
       if (e.payload?.projectId && e.payload.projectId !== ctx.project.id) return;
       if (prefixes.some((p) => e.type.startsWith(p))) reload();
