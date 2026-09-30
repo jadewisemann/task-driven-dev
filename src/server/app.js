@@ -3,7 +3,7 @@ import { hostname } from 'node:os';
 import { Database } from './core/db.js';
 import { EventBus } from './core/events.js';
 import { migrations } from './core/migrations.js';
-import { dbPath, resolveHome } from './core/paths.js';
+import { dbPath, markOpen, readDaemonInfo, resolveHome } from './core/paths.js';
 import { RpcRegistry } from './rpc/registry.js';
 import { createProjectService, registerProjectRpc } from './domain/projects.js';
 import { createTaskService, registerTaskRpc } from './domain/tasks.js';
@@ -17,6 +17,7 @@ import { createOrchestrator, registerOrchestratorRpc } from './orchestrator/orch
 import { createPeerManager, registerPeerRpc } from './remote/peers.js';
 import { toRpcError } from './core/errors.js';
 import { EventHistory } from './core/history.js';
+import { runDoctor } from './core/doctor.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
 
@@ -31,6 +32,8 @@ const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.ur
 export function createApp(options = {}) {
   const home = options.dbFile === ':memory:' ? null : resolveHome(options.home);
   const db = new Database(options.dbFile || dbPath(home));
+  // Marks this home as in use (server, CLI session, SSH bridge) so `restore` never swaps a database out from under us.
+  const openMarker = home ? markOpen(home) : null;
   db.migrate(migrations);
 
   const bus = new EventBus();
@@ -115,6 +118,7 @@ export function createApp(options = {}) {
     },
 
     async _close() {
+      openMarker?.release();
       for (const dispose of app.disposers.splice(0).reverse()) {
         try {
           await dispose();
@@ -127,8 +131,9 @@ export function createApp(options = {}) {
   };
 
   rpc.group('system', {
-    info: { handler: () => ({ name: 'todo-devs', version: pkg.version, host: hostname(), home, pid: process.pid }), description: 'Instance info' },
+    info: { handler: () => ({ name: 'todo-devs', version: pkg.version, host: hostname(), home, pid: process.pid, platform: process.platform, node: process.versions.node, feedbackUrl: pkg.bugs?.url || null }), description: 'Instance info' },
     methods: { handler: () => rpc.list(), description: 'List RPC methods' },
+    doctor: { handler: () => runDoctor({ app, home, daemon: home ? readDaemonInfo(home) : null, servicePaths: app.servicePaths?.() ?? null }), description: 'Environment and data health checks' },
     ping: { handler: () => ({ pong: true, ts: new Date().toISOString() }), description: 'Liveness check' },
   });
   registerProjectRpc(rpc, projects);

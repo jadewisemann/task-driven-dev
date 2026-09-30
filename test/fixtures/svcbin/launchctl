@@ -1,0 +1,12 @@
+#!/bin/sh
+# Fake launchctl: records calls; `bootstrap` starts the server if FAKE_SVC_START=1; `print` reports the job gone.
+echo "launchctl $*" >> "$FAKE_SVC_LOG"
+case "$1" in
+  print) exit 113 ;;
+  bootstrap)
+    if [ "$FAKE_SVC_START" = "1" ]; then
+      nohup node "$TODO_DEVS_BIN" serve --home "$FAKE_SVC_HOME" --port "$FAKE_SVC_PORT" > /dev/null 2>&1 &
+      echo $! > "$FAKE_SVC_HOME/fake.pid"
+    fi ;;
+esac
+exit 0

@@ -106,6 +106,11 @@ export class Database {
   }
 }
 
+/** Opens a SQLite file read-only (never changes its journal mode or creates -wal files). */
+export function openReadOnly(file) {
+  return new DatabaseSync(file, { readOnly: true });
+}
+
 /** Parses a JSON column, returning fallback for null/invalid content. */
 export function parseJson(value, fallback = null) {
   if (value === null || value === undefined || value === '') return fallback;
