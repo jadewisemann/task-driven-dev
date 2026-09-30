@@ -140,14 +140,19 @@ test('workflows: create from template, connect a node, run it', async (t) => {
   // Hold the workflows.run response so the run's finished event always arrives first
   // (regression test: the panel used to stay on "running…").
   await page.route('**/api/rpc', async (route) => {
-    const response = await route.fetch();
-    if ((route.request().postData() || '').includes('"workflows.run"')) await new Promise((r) => setTimeout(r, 800));
-    await route.fulfill({ response });
+    try {
+      const response = await route.fetch();
+      if ((route.request().postData() || '').includes('"workflows.run"')) await new Promise((r) => setTimeout(r, 800));
+      await route.fulfill({ response });
+    } catch {
+      // The page closed while a request was held (e.g. a live-refresh poll): nothing to answer.
+    }
   });
   await page.click('text=▶ Run');
   await page.click('.modal .btn.primary');
   await page.waitForFunction(() => /succeeded|failed|cancelled/.test(document.querySelector('.run-status')?.textContent || ''), null, { timeout: 15000 });
   assert.match(await page.locator('.run-status').innerText(), /succeeded/);
+  await page.unrouteAll({ behavior: 'wait' });
   await done();
 });
 

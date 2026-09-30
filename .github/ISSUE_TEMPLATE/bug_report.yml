@@ -1,0 +1,43 @@
+name: Bug report
+description: Something broke or behaved unexpectedly
+labels: [bug, alpha]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. todo-devs serve
+        2. …
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Board / scheduler, Agents / harness, Orchestrator, Workflows, Remote (SSH), Mobile app, Install / service / backup, Other]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `todo-devs --version` (and the app version from More → About)
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: todo-devs doctor --json
+      render: json
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Server output or ~/.todo-devs/logs/server.log (remove anything private)
+      render: text

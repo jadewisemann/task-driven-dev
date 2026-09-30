@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Alpha test guide
+    url: https://github.com/jadewisemann/task-driven-dev/blob/v0.1.0-alpha.1/docs/ALPHA.md
+    about: Install steps, test scenarios and known limitations
