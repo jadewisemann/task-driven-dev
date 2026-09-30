@@ -81,6 +81,8 @@ jobs:
 
   android:
     name: Android APK + emulator smoke test (Maestro)
+    # Slow native jobs: on PRs, main, release tags and manual runs — not on every feature-branch push.
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/heads/feat/')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -112,7 +114,7 @@ jobs:
           if-no-files-found: error
       - name: Install Maestro
         run: |
-          curl -fsSL "https://get.maestro.mobile.dev" | bash
+          curl -fsSL "https://get.maestro.mobile.dev" | MAESTRO_VERSION=2.10.0 bash
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
       - name: Enable KVM
         run: |
@@ -138,6 +140,8 @@ jobs:
 
   ios-simulator:
     name: iOS simulator build
+    # Slow native jobs: on PRs, main, release tags and manual runs — not on every feature-branch push.
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/heads/feat/')
     runs-on: macos-latest
     timeout-minutes: 75
     defaults:

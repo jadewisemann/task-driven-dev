@@ -15,7 +15,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Fail in seconds (not after the whole CI run) when the tag and the versions disagree.
+  versions:
+    name: Tag matches package.json and app.json
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node .github/scripts/check-versions.mjs "$GITHUB_REF_NAME"
+
   ci:
+    needs: versions
     uses: ./.github/workflows/ci.yml
 
   publish:
@@ -30,11 +42,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Tag matches package.json
-        run: |
-          V=$(node -p "require('./package.json').version")
-          [ "v$V" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME does not match package.json version $V"; exit 1; }
-          echo "VERSION=$V" >> "$GITHUB_ENV"
+      - name: Version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
       - name: npm package
         run: mkdir -p dist && npm pack --pack-destination dist
       - uses: actions/download-artifact@v4

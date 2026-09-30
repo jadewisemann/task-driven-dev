@@ -23,4 +23,6 @@ First alpha. Install and test guide: `docs/ALPHA.md`.
 ### Known limitations
 - Real LLM CLIs are not exercised in CI; harness flags may differ across CLI versions.
 - No signed iOS device build (use Expo Go), and no push notifications.
+- Tasks assigned to an agent whose CLI is missing fail; switch those agents to the `mock` harness to try the flow without CLIs.
+- The APK is signed with the public Expo debug key: only install it from the GitHub release.
 - Windows is not supported natively.

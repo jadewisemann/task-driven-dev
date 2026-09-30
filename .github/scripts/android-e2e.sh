@@ -4,7 +4,7 @@
 # the task created in the app must exist on the server.
 #   usage: android-e2e.sh <apk>
 set -euo pipefail
-APK=$1
+APK=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 HOME_DIR=${RUNNER_TEMP:-/tmp}/todo-devs-e2e
 OUT=${E2E_OUT:-$ROOT/e2e-artifacts}

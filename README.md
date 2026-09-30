@@ -115,7 +115,7 @@ GitHub Actions(`.github/workflows/ci.yml`)가 push/PR 마다 실행합니다:
 **iOS** 는 시뮬레이터용 Release 빌드 후 시뮬레이터에서 실행 확인.
 원격(SSH) 테스트는 `test/fixtures/bin/ssh` 가짜 ssh 로 원격 명령을 그대로 `sh -c` 실행해 검증합니다.
 
-릴리스: `package.json` 버전과 `CHANGELOG.md` 섹션을 맞춘 뒤 `git tag v<버전> && git push origin v<버전>` →
+릴리스: `package.json` 버전, `apps/mobile/app.json`(`version`·`extra.channel`, `versionCode`/`buildNumber` 증가), `CHANGELOG.md` 섹션을 맞춘 뒤 `git tag v<버전> && git push origin v<버전>` →
 `release.yml` 이 전체 CI 를 돌리고 npm 패키지·APK·iOS 시뮬레이터 빌드·SHA256SUMS 를 GitHub 릴리스(버전에 `-` 가 있으면 prerelease)로 게시합니다.
 
 ## 보안 메모

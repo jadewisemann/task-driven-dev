@@ -14,9 +14,11 @@ appId: dev.tododevs.mobile
     timeout: 30000
 - tapOn:
     id: "pair-confirm"
+# The board of the paired server (quick add shows on the default "To do" column).
+# Plain layout Views are not in Android's accessibility tree, so wait on a real control.
 - extendedWaitUntil:
     visible:
-      id: "board-screen"
+      id: "quick-add-input"
     timeout: 30000
 - tapOn:
     id: "quick-add-input"
@@ -32,7 +34,7 @@ appId: dev.tododevs.mobile
 - assertVisible: "What should the team build?"
 - tapOn: "More"
 - scrollUntilVisible:
-    element: "About"
+    element: "Report an issue"
     direction: DOWN
-- assertVisible: "Report an issue"
+- assertVisible: "About"
 - takeScreenshot: more

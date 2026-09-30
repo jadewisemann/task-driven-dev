@@ -43,7 +43,6 @@ export default function Board() {
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={90}>
       <FeedBanner />
       <Screen refreshing={refreshing} onRefresh={refresh}>
-        <View testID="board-screen" />
         <Row>
           <Muted small>{`${p.done}/${p.total} done`}</Muted>
           <Progress ratio={p.ratio} />

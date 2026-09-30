@@ -26,7 +26,7 @@ test('version and doctor', async (t) => {
   assert.equal(viaServer.checks.find((c) => c.id === 'server').status, 'ok');
   const info = (await rpc(daemon.url, 'system.info')).body.result;
   assert.equal(info.version, VERSION);
-  assert.match(info.feedbackUrl, /\/issues$/);
+  assert.match(info.feedbackUrl, /\/issues\/new\/choose$/);
 });
 
 test('service definitions for launchd and systemd', () => {
