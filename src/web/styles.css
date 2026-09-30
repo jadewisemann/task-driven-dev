@@ -235,3 +235,42 @@ pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var
 .check { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; cursor: pointer; }
 .preview-block { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; max-height: 260px; overflow: auto; margin-bottom: 10px; }
 .prompt-preview { margin-top: 10px; }
+
+/* runner */
+.run-controls { display: flex; gap: 8px; align-items: center; }
+.sched-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); font-size: 12px; }
+.sched-pill .dot { background: var(--muted); }
+.sched-running .dot { background: var(--st-running); animation: blink 1s infinite; }
+.sched-waiting .dot { background: var(--st-review); }
+.sched-finished .dot { background: var(--st-done); }
+.sched-stopped .dot { background: var(--st-failed); }
+@keyframes blink { 50% { opacity: 0.3; } }
+.card-run { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 11px; border-top: 1px dashed var(--border); padding-top: 6px; }
+.card-run.running { color: var(--st-running); justify-content: flex-start; }
+.card-run.failed { color: var(--st-failed); }
+.card-run.review { color: var(--st-review); }
+.card-run.done { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-error { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spinner { width: 10px; height: 10px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; display: inline-block; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.run-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.error-block { border-color: var(--danger); color: #ffb3c1; }
+details { margin-bottom: 8px; }
+summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.runs-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+.run-row, .run-item { display: flex; gap: 8px; align-items: center; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 5px 8px; cursor: pointer; text-align: left; }
+.run-row:hover, .run-item:hover { background: var(--panel-2); }
+.run-item.active { border-color: var(--accent); background: var(--panel-2); }
+.dot.run-running { background: var(--st-running); }
+.dot.run-succeeded { background: var(--st-done); }
+.dot.run-failed, .dot.run-cancelled { background: var(--st-failed); }
+.dot.run-stopped, .dot.run-interrupted { background: var(--muted); }
+.log-console { background: #07080c; border: 1px solid var(--border); border-radius: 8px; padding: 10px; overflow: auto; min-height: 80px; font-size: 12px; line-height: 1.5; }
+.log-stderr { color: #ff8fa3; }
+.log-system { color: var(--accent-2); }
+.runs-layout { display: grid; grid-template-columns: 320px 1fr; gap: 12px; }
+.runs-sidebar { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; display: flex; flex-direction: column; gap: 2px; max-height: calc(100vh - 150px); overflow-y: auto; }
+.run-item { flex-wrap: wrap; }
+.run-item-title { flex: 1; }
+.runs-detail { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; min-width: 0; }
+.run-head { margin-bottom: 10px; display: flex; flex-direction: column; gap: 6px; }

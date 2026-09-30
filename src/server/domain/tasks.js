@@ -23,6 +23,8 @@ const FIELDS = {
   attempts: ['attempts'],
   startedAt: ['started_at'],
   finishedAt: ['finished_at'],
+  branch: ['branch'],
+  worktreePath: ['worktree_path'],
 };
 
 function mapRow(r, dependsOn = []) {
@@ -44,6 +46,8 @@ function mapRow(r, dependsOn = []) {
     error: r.error,
     attempts: r.attempts,
     dependsOn,
+    branch: r.branch ?? null,
+    worktreePath: r.worktree_path ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     startedAt: r.started_at,
@@ -107,6 +111,8 @@ export function createTaskService({ db, bus }) {
 
     /** Optional hook set by the agents feature: throws if an assignee id is unknown. */
     validateAssignee: null,
+    /** Optional hook set by the runtime: (current, patch, opts) => throws to reject an update. */
+    guardUpdate: null,
 
     list({ projectId, status } = {}) {
       const where = [];
@@ -171,10 +177,14 @@ export function createTaskService({ db, bus }) {
       return task;
     },
 
-    /** Updates any subset of FIELDS plus `dependsOn` (full replacement). */
-    update(id, patch) {
+    /**
+     * Updates any subset of FIELDS plus `dependsOn` (full replacement).
+     * opts.internal marks writes from the runtime (bypasses guardUpdate).
+     */
+    update(id, patch, opts = {}) {
       const current = svc.get(id);
       if (patch.assigneeId) svc.validateAssignee?.(patch.assigneeId);
+      svc.guardUpdate?.(current, patch, opts);
       const sets = [];
       const params = [];
       for (const [key, value] of Object.entries(patch)) {

@@ -11,7 +11,7 @@ const LOOPBACK = ['127.0.0.1', 'localhost', '::1'];
  */
 export async function serve({ home, port = 7420, host = '127.0.0.1', allowedHosts = [], token }) {
   if (!LOOPBACK.includes(host) && !token) token = randomBytes(18).toString('base64url');
-  const app = createApp({ home });
+  const app = createApp({ home, recover: true });
   const server = createHttpServer(app, { allowedHosts, token });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
