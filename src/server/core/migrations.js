@@ -67,4 +67,37 @@ export const migrations = [
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
     `,
   },
+  {
+    id: '003_runs',
+    up: `
+      CREATE TABLE runs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+        agent_id TEXT,
+        kind TEXT NOT NULL DEFAULT 'task',
+        status TEXT NOT NULL DEFAULT 'running',
+        attempt INTEGER NOT NULL DEFAULT 1,
+        command TEXT,
+        cwd TEXT,
+        exit_code INTEGER,
+        error TEXT,
+        meta TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT
+      );
+      CREATE INDEX idx_runs_project ON runs(project_id, started_at);
+      CREATE INDEX idx_runs_task ON runs(task_id, started_at);
+      CREATE TABLE run_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        ts TEXT NOT NULL,
+        stream TEXT NOT NULL,
+        text TEXT NOT NULL
+      );
+      CREATE INDEX idx_run_logs_run ON run_logs(run_id, id);
+      ALTER TABLE tasks ADD COLUMN branch TEXT;
+      ALTER TABLE tasks ADD COLUMN worktree_path TEXT;
+    `,
+  },
 ];

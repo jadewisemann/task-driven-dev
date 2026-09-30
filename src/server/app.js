@@ -8,6 +8,10 @@ import { RpcRegistry } from './rpc/registry.js';
 import { createProjectService, registerProjectRpc } from './domain/projects.js';
 import { createTaskService, registerTaskRpc } from './domain/tasks.js';
 import { createAgentService, registerAgentRpc } from './domain/agents.js';
+import { createRunStore } from './runtime/runs.js';
+import { createRunner } from './runtime/runner.js';
+import { createScheduler } from './runtime/scheduler.js';
+import { registerRuntimeRpc } from './runtime/rpc.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
 
@@ -16,7 +20,8 @@ const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.ur
  * surface. Everything that talks to the app (HTTP, stdio bridge, CLI) goes
  * through `app.dispatch`.
  *
- * @param {{home?: string, dbFile?: string, log?: (err: unknown) => void}} [options]
+ * @param {{home?: string, dbFile?: string, log?: (err: unknown) => void, recover?: boolean}} [options]
+ *   recover: reset runs/tasks left "running" by a previous process (only the long-lived server should do this).
  */
 export function createApp(options = {}) {
   const home = options.dbFile === ':memory:' ? null : resolveHome(options.home);
@@ -34,6 +39,12 @@ export function createApp(options = {}) {
   projects.ensureDefault();
   agents.seedStarterTeam();
 
+  const services = { projects, tasks, agents };
+  const runs = createRunStore({ db, bus });
+  const runner = createRunner({ bus, services, runs, home });
+  const scheduler = createScheduler({ bus, services, runner, log });
+  if (options.recover) runner.recoverInterrupted();
+
   const app = {
     version: pkg.version,
     home,
@@ -41,9 +52,17 @@ export function createApp(options = {}) {
     bus,
     rpc,
     log,
-    services: { projects, tasks, agents },
+    services,
+    runs,
+    runner,
+    scheduler,
     /** Hooks run on shutdown (child processes, remote connections, timers). */
-    disposers: [],
+    disposers: [
+      async () => {
+        scheduler.stopAll();
+        await runner.cancelAll();
+      },
+    ],
 
     /** Executes a JSON-RPC request object. `peer` routing is added by the remote feature. */
     async dispatch(request) {
@@ -77,6 +96,7 @@ export function createApp(options = {}) {
   registerProjectRpc(rpc, projects);
   registerTaskRpc(rpc, tasks, projects);
   registerAgentRpc(rpc, { agents, tasks, projects });
+  registerRuntimeRpc(rpc, { runner, scheduler, runs, services, log });
 
   return app;
 }

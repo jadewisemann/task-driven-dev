@@ -23,6 +23,8 @@ const FIELDS = {
   attempts: ['attempts'],
   startedAt: ['started_at'],
   finishedAt: ['finished_at'],
+  branch: ['branch'],
+  worktreePath: ['worktree_path'],
 };
 
 function mapRow(r, dependsOn = []) {
@@ -44,6 +46,8 @@ function mapRow(r, dependsOn = []) {
     error: r.error,
     attempts: r.attempts,
     dependsOn,
+    branch: r.branch ?? null,
+    worktreePath: r.worktree_path ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     startedAt: r.started_at,
