@@ -43,7 +43,7 @@ todo-devs service status
 |------|------|
 | Android | 릴리스의 `todo-devs-0.1.0-alpha.1.apk` 를 휴대폰에서 받아 설치("출처를 알 수 없는 앱" 허용). ⚠️ 알파 APK 는 Expo 템플릿의 **공개된 디버그 키**로 서명되어 있습니다. 같은 키로 서명된 다른 APK 가 업데이트로 설치되면 앱에 저장된 서버 토큰을 가져갈 수 있으니, 이 릴리스 페이지 외의 APK 는 설치하지 마세요. 이후 정식 빌드와는 서명이 달라 재설치가 필요합니다. |
 | iOS 시뮬레이터 (Mac) | `todo-devs-0.1.0-alpha.1-ios-simulator.zip` 압축을 풀고 시뮬레이터를 켠 뒤 `xcrun simctl install booted <압축에서 나온 .app>` (또는 .app 을 시뮬레이터 창에 드래그) |
-| iPhone 실기기 | 아직 서명된 빌드가 없습니다. 소스에서 `cd apps/mobile && npm ci && npx expo start` 후 Expo Go 로 QR 스캔. Expo Go 에서는 `todo-devs://` 링크가 열리지 않으니 앱의 연결 화면에 주소와 코드를 직접 입력하세요 |
+| iPhone 실기기 | 아직 서명된 빌드가 없습니다. 소스에서 `cd apps/mobile && npm ci && npx expo start` 후 Expo Go 로 QR 스캔. Expo Go 에서는 `todo-devs://` 링크가 열리지 않으니 링크를 복사해 연결 화면의 **Paste pairing link** 를 누르거나 주소와 코드를 직접 입력하세요 |
 
 **페어링**: 컴퓨터에서 서버를 네트워크 모드로 띄운 뒤(`--host 0.0.0.0`) `todo-devs pair` 를 실행하고,
 출력된 `todo-devs://pair?…` 링크를 휴대폰에서 열어 **Pair** 를 누릅니다(또는 앱에 주소와 코드 입력). 코드는 10분·1회용입니다.
