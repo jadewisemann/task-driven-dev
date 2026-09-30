@@ -2,7 +2,7 @@
 
 AI 에이전트를 팀원처럼 칸반 카드에 배정하고, 선행/후행 관계를 따라 **끝까지 자율 실행**하는 로컬 도구.
 자연어 목표를 오케스트레이터가 작업으로 쪼개 작은 모델에 할당하고, n8n 식 노드 그래프로 흐름을 제어하며,
-SSH 로 다른 머신의 세션을 그대로 원격 조작합니다.
+SSH 로 다른 머신의 세션을 그대로 원격 조작합니다. 휴대폰용 React Native 앱(`apps/mobile`)도 있습니다.
 
 - 런타임 의존성 없음 — Node.js **22.13+** 만 있으면 됩니다 (`node:sqlite`, `node:http`).
 - 데이터: `~/.todo-devs` (`--home` 또는 `TODO_DEVS_HOME` 으로 변경)
@@ -64,6 +64,20 @@ todo-devs plan "결제 API 를 만들고 그 다음 결제 화면, 그리고 테
 서버가 없으면 세션 동안만 임베디드 인스턴스가 열립니다(동시에 하나만). `--exec "docker exec -i box todo-devs rpc"` 같은 임의 전송도 지원합니다.
 원격 UI 를 직접 쓰려면 터널: `ssh -L 7421:127.0.0.1:7420 me@build-box` 후 `http://localhost:7421`.
 
+## 모바일 앱
+
+`apps/mobile` — Expo(SDK 57) · expo-router · TypeScript. 보드/담당자 지정, 실행·취소·재시도·승인,
+오케스트레이터 목표 입력 → 플랜 검토 → 실행, 실시간 로그, 에이전트 모델/노력 조정, SSH 원격 세션 전환, 워크플로우 실행.
+
+```bash
+todo-devs serve --host 0.0.0.0     # 네트워크 모드 (토큰 필수, ~/.todo-devs/auth.json 에 보관)
+todo-devs pair                     # 1회용 페어링 코드(10분·1회) + 앱/브라우저 링크
+cd apps/mobile && npm run setup && npx expo start
+```
+
+휴대폰에서 `todo-devs://pair?...` 링크를 열고 **Pair** 를 누르거나, 앱에 주소와 코드를 입력합니다.
+같은 Wi‑Fi 밖에서는 Tailscale 주소(`todo-devs pair --host <tailscale-ip>`)를 쓰세요. 자세한 내용은 [apps/mobile/README.md](apps/mobile/README.md).
+
 ## CLI
 
 ```
@@ -72,6 +86,7 @@ todo-devs status | tasks | add "<title>" [--after ID,ID] [--agent NAME]
 todo-devs plan "<goal>" [--run] [--wait] [--auto-approve]
 todo-devs run [--concurrency 2] [--auto-approve] | stop
 todo-devs peer add|list|ping|rm …
+todo-devs pair [--host ADDR] | token rotate     # 모바일/다른 기기 페어링
 todo-devs call <method> [json] | methods        # 모든 기능은 JSON-RPC 메서드로 노출
 ```
 
@@ -80,7 +95,9 @@ todo-devs call <method> [json] | methods        # 모든 기능은 JSON-RPC 메�
 ## 보안 메모
 
 - 기본 바인딩은 `127.0.0.1`. Host/Origin 검사, `application/json` 강제로 DNS 리바인딩·CSRF 차단.
-  루프백 외 바인딩 시 토큰이 자동 생성되며 UI 는 `?token=` 으로 접속합니다.
+- 네트워크 모드(`--host 0.0.0.0`)에서는 모든 API 에 토큰이 필요합니다(헤더로만 전달, 이벤트 스트림만 예외).
+  토큰은 `auth.json`(0600)에 보관되고 링크에는 절대 들어가지 않습니다 — 기기는 1회용 코드(10분, 1회, 시도 횟수 제한)로 토큰을 받습니다.
+  LAN 주소는 평문 HTTP 이므로 신뢰하는 네트워크에서만 쓰고, 외부에서는 Tailscale 을 권장합니다. `todo-devs token rotate` 로 모든 기기 연결을 끊을 수 있습니다.
 - API 에 접근할 수 있으면 `shell`/`custom` 하네스로 로컬 명령을 실행할 수 있습니다(로컬 도구의 의도된 권한).
   에이전트 `env` 값은 API/이벤트에서 마스킹됩니다. 자율성(`safe`/`auto`/`full`)은 하네스별 권한 플래그로 매핑됩니다.
 - 원격에서 온 이벤트는 UI 로만 중계되고 로컬 스케줄러/러너에는 영향을 주지 않습니다. ssh 옵션은 허용 목록만 받습니다.
@@ -102,5 +119,6 @@ src/server/workflow/      노드 엔진, 노드 타입, 식/템플릿, 템플릿
 src/server/orchestrator/  플래너, 할당기, 플랜 수명주기
 src/server/remote/        피어 관리, 원격 클라이언트
 src/web/                  빌드 없는 ES 모듈 UI
+apps/mobile/              React Native(Expo) 앱 — src/core 는 React 비의존 TS (RPC·롱폴링·페어링)
 docs/PLAN.md              구현 계획
 ```
