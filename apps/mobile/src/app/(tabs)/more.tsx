@@ -1,12 +1,15 @@
+import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Text, View } from 'react-native';
+import { Linking, Text, View } from 'react-native';
 import type { Peer, Workflow } from '../../core/types.ts';
 import { useSession } from '../../state/connection.tsx';
 import { useLive } from '../../state/useLive.ts';
 import { FeedBanner } from '../../ui/FeedBanner.tsx';
 import { Badge, Button, Card, Dot, ErrorText, Input, Muted, Row, Screen, SectionTitle, monoFont } from '../../ui/components.tsx';
 import { colors } from '../../ui/theme.ts';
+
+const FEEDBACK_URL = 'https://github.com/jadewisemann/task-driven-dev/issues/new/choose';
 
 const PEER_COLOR: Record<Peer['status']['state'], string> = { connected: colors.accent2, connecting: colors.warn, error: colors.danger, disconnected: colors.muted };
 
@@ -74,6 +77,13 @@ export default function More() {
           </Card>
         ))}
         <Button title="Pair another server" onPress={() => router.push('/connect')} />
+
+        <SectionTitle>About</SectionTitle>
+        <Card>
+          <Text style={{ color: colors.text, fontWeight: '600' }}>{`todo.devs ${Constants.expoConfig?.version ?? ''} · ${(Constants.expoConfig?.extra as { channel?: string } | undefined)?.channel ?? ''}`}</Text>
+          <Muted small>Alpha build — expect rough edges. Reports help a lot: include what you did, what you expected, and `todo-devs doctor` from the computer.</Muted>
+          <Button small kind="primary" title="Report an issue" onPress={() => Linking.openURL(FEEDBACK_URL)} />
+        </Card>
       </Screen>
     </>
   );

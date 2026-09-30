@@ -40,7 +40,7 @@ const BUTTON_BG: Record<ButtonKind, string> = { primary: colors.accent, success:
  * Button that shows a spinner and blocks double taps while its async action
  * runs. Errors that reach it are shown in an alert (never an unhandled rejection).
  */
-export function Button({ title, onPress, kind = 'default', disabled, small }: { title: string; onPress: () => unknown; kind?: ButtonKind; disabled?: boolean; small?: boolean }) {
+export function Button({ title, onPress, kind = 'default', disabled, small, testID }: { title: string; onPress: () => unknown; kind?: ButtonKind; disabled?: boolean; small?: boolean; testID?: string }) {
   const [busy, setBusy] = useState(false);
   const press = async () => {
     if (busy) return;
@@ -56,6 +56,8 @@ export function Button({ title, onPress, kind = 'default', disabled, small }: { 
   const off = disabled || busy;
   return (
     <Pressable
+      testID={testID}
+      accessibilityRole="button"
       onPress={press}
       disabled={off}
       style={({ pressed }) => [

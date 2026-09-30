@@ -43,6 +43,7 @@ export default function Board() {
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={90}>
       <FeedBanner />
       <Screen refreshing={refreshing} onRefresh={refresh}>
+        <View testID="board-screen" />
         <Row>
           <Muted small>{`${p.done}/${p.total} done`}</Muted>
           <Progress ratio={p.ratio} />
@@ -54,9 +55,9 @@ export default function Board() {
         {(column === 'backlog' || column === 'todo') && (
           <Row>
             <View style={{ flex: 1 }}>
-              <Input placeholder={`Add to ${col.title}…`} value={title} onChangeText={setTitle} onSubmitEditing={() => void add().catch(() => {})} returnKeyType="done" />
+              <Input testID="quick-add-input" placeholder={`Add to ${col.title}…`} value={title} onChangeText={setTitle} onSubmitEditing={() => void add().catch(() => {})} returnKeyType="done" />
             </View>
-            <Button title="Add" onPress={add} disabled={!title.trim()} />
+            <Button testID="quick-add-button" title="Add" onPress={add} disabled={!title.trim()} />
           </Row>
         )}
       </Screen>

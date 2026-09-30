@@ -1,0 +1,38 @@
+# Alpha smoke test: pair with a real server through the deep link, add a task, visit the tabs.
+# Run by .github/scripts/android-e2e.sh (LINK = `todo-devs pair --host 10.0.2.2 --json` deep link).
+appId: dev.tododevs.mobile
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: "Pair a todo.devs server"
+    timeout: 60000
+- openLink: ${LINK}
+- extendedWaitUntil:
+    visible:
+      id: "pair-confirm"
+    timeout: 30000
+- tapOn:
+    id: "pair-confirm"
+- extendedWaitUntil:
+    visible:
+      id: "board-screen"
+    timeout: 30000
+- tapOn:
+    id: "quick-add-input"
+- inputText: "From Maestro"
+- hideKeyboard
+- tapOn:
+    id: "quick-add-button"
+- extendedWaitUntil:
+    visible: "From Maestro"
+    timeout: 15000
+- takeScreenshot: board
+- tapOn: "Orchestrator"
+- assertVisible: "What should the team build?"
+- tapOn: "More"
+- scrollUntilVisible:
+    element: "About"
+    direction: DOWN
+- assertVisible: "Report an issue"
+- takeScreenshot: more
