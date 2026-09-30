@@ -64,6 +64,7 @@ export const migrations = [
         updated_at TEXT NOT NULL
       );
       CREATE INDEX idx_tasks_assignee ON tasks(assignee_id);
+      CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
     `,
   },
 ];

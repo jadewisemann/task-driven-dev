@@ -61,6 +61,7 @@ export const agentsView = {
     }
 
     function openEditor(agent) {
+      if (!state.options) return toast('Still loading…');
       const isNew = !agent;
       const a = agent || {
         name: '',
@@ -88,16 +89,53 @@ export const agentsView = {
       };
       const modelList = h('datalist', { id: 'model-suggestions' });
       const harnessInfo = h('p', { class: 'muted small' });
-      const commandField = h('label', { class: 'field' }, h('span', {}, 'Command template'), f.command);
-      const syncHarness = () => {
+      const allowTaskCommand = h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: a.config.allowTaskCommand, onChange: (e) => setConfig('allowTaskCommand', e.target.checked) }), 'Allow task input {"command"} to override (runs on this host)');
+      const commandField = h('div', {}, h('label', { class: 'field' }, h('span', {}, 'Command template'), f.command), allowTaskCommand);
+      const syncHarness = (changed) => {
         const def = state.harnesses.find((x) => x.id === f.harness.value);
         modelList.replaceChildren(...(def?.models || []).map((m) => h('option', { value: m })));
         harnessInfo.textContent = `${def?.description || ''}${def?.nativeEffort ? ' Effort maps to a native reasoning setting.' : ' Effort is conveyed through the prompt.'}`;
         commandField.style.display = ['custom', 'shell'].includes(f.harness.value) ? '' : 'none';
+        allowTaskCommand.style.display = f.harness.value === 'shell' ? '' : 'none';
+        // A model id from another harness (e.g. "sonnet" on codex) would be passed through verbatim.
+        if (changed && def && !def.models.includes(f.model.value)) {
+          f.model.value = def.models[0] || '';
+          syncTier();
+        }
       };
-      f.harness.addEventListener('change', syncHarness);
+      let tierTouched = !isNew;
+      f.tier.addEventListener('change', () => (tierTouched = true));
+      const syncTier = debounce(async () => {
+        if (tierTouched) return;
+        f.tier.value = String(await ctx.rpc('harnesses.inferTier', { model: f.model.value }));
+      }, 250);
+      f.model.addEventListener('input', syncTier);
+      f.harness.addEventListener('change', () => syncHarness(true));
       f.command.addEventListener('input', () => setConfig('command', f.command.value));
-      syncHarness();
+      syncHarness(false);
+
+      const autonomy = h(
+        'select',
+        { onChange: (e) => setConfig('autonomy', e.target.value) },
+        state.options.autonomy.map((x) => h('option', { value: x, selected: x === a.config.autonomy }, { safe: 'safe — edit files only', auto: 'auto — edit files + run commands', full: 'full — no guard rails' }[x])),
+      );
+      const envInput = h(
+        'textarea',
+        {
+          rows: 2,
+          class: 'code',
+          placeholder: 'KEY=value (one per line). Values are write-only.',
+          onInput: (e) => {
+            const env = {};
+            for (const line of e.target.value.split('\n')) {
+              const i = line.indexOf('=');
+              if (i > 0) env[line.slice(0, i).trim()] = line.slice(i + 1);
+            }
+            setConfig('env', env);
+          },
+        },
+        Object.entries(a.config.env || {}).map(([k, v]) => `${k}=${v}`).join('\n'),
+      );
 
       let effort = a.effort;
       const effortButtons = state.options.efforts.map((e) =>
@@ -130,7 +168,7 @@ export const agentsView = {
 
       const g = a.config.contextGraph;
       const depthLabel = h('span', { class: 'muted' }, String(g.upstreamDepth));
-      const depth = h('input', { type: 'range', min: 0, max: 5, value: g.upstreamDepth });
+      const depth = h('input', { type: 'range', min: 0, max: 20, value: g.upstreamDepth });
       depth.addEventListener('input', () => {
         depthLabel.textContent = depth.value;
         setGraph('upstreamDepth', Number(depth.value));
@@ -161,8 +199,9 @@ export const agentsView = {
         await run();
       }
 
+      /** New agents send everything; existing ones send only changed fields (no clobbering concurrent edits). */
       async function save() {
-        const body = {
+        const next = {
           name: f.name.value.trim(),
           role: f.role.value,
           persona: f.persona.value,
@@ -171,11 +210,12 @@ export const agentsView = {
           effort,
           tier: Number(f.tier.value),
           color,
-          config: form.config,
         };
-        if (!body.name) return toast('Name is required', 'error');
+        if (!next.name) return toast('Name is required', 'error');
+        const body = isNew ? next : Object.fromEntries(Object.entries(next).filter(([k, v]) => v !== a[k]));
+        if (Object.keys(form.config).length) body.config = form.config;
         if (isNew) await ctx.rpc('agents.create', body);
-        else await ctx.rpc('agents.update', { id: agent.id, ...body });
+        else if (Object.keys(body).length) await ctx.rpc('agents.update', { id: agent.id, ...body });
         toast(`Agent ${body.name} saved`, 'success');
         drawer.close();
       }
@@ -217,7 +257,9 @@ export const agentsView = {
           h('label', { class: 'field' }, h('span', {}, 'Retries'), numberInput(a.config.retries, (v) => setConfig('retries', v), { min: 0, max: 10 })),
           h('label', { class: 'field' }, h('span', {}, 'Timeout (sec)'), numberInput(a.config.timeoutSec, (v) => setConfig('timeoutSec', v), { min: 5 })),
         ),
+        h('label', { class: 'field' }, h('span', {}, 'Autonomy (mapped onto each harness’s permission flags)'), autonomy),
         h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: a.config.useWorktree, onChange: (e) => setConfig('useWorktree', e.target.checked) }), 'Work in an isolated git worktree per task'),
+        h('label', { class: 'field' }, h('span', {}, 'Environment variables'), envInput),
         h(
           'label',
           { class: 'field' },
