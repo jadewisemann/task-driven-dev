@@ -69,7 +69,19 @@ function connect() {
     } catch {
       return;
     }
-    if (!event.peer) for (const fn of localListeners) fn(event);
+    if (!event.peer) {
+      for (const fn of localListeners) {
+        try {
+          fn(event);
+        } catch (err) {
+          console.error(err);
+        }
+      }
+      // The active remote session (re)connected: events may have been missed, reload views.
+      if (currentPeer && event.type === 'peer.status' && event.payload?.peerId === currentPeer && event.payload.state === 'connected') {
+        emit({ type: 'sync.reconnected', payload: {} });
+      }
+    }
     // Events relayed from a remote session carry `peer`; show only the active session's events.
     if ((event.peer || null) !== currentPeer) return;
     emit(event);

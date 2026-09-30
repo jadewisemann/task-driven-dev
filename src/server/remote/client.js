@@ -49,10 +49,12 @@ export class RemoteClient extends EventEmitter {
         settled = true;
         clearTimeout(timer);
         this.connecting = null;
+        this.abortConnect = null;
         this.setState('error', { error: err.message });
         this.kill();
         reject(err);
       };
+      this.abortConnect = () => fail(new Error('remote session closed'));
       const timer = setTimeout(() => fail(new Error(`remote did not answer within ${CONNECT_TIMEOUT_MS / 1000}s${this.stderrTail ? `: ${this.stderrTail.trim().split('\n').pop()}` : ''}`)), CONNECT_TIMEOUT_MS);
 
       let child;
@@ -67,7 +69,8 @@ export class RemoteClient extends EventEmitter {
       child.stderr.on('data', (t) => (this.stderrTail = (this.stderrTail + t).slice(-8000)));
       child.stdin.on('error', () => {});
       child.on('error', (err) => fail(err.code === 'ENOENT' ? new Error(`${this.spec.command} not found on PATH`) : err));
-      child.on('exit', (code) => {
+      // 'close' fires after stdout is drained, so final responses are delivered before pending calls are failed.
+      child.on('close', (code) => {
         const reason = new Error(`remote session ended (exit ${code})${this.stderrTail ? `: ${this.stderrTail.trim().split('\n').pop()}` : ''}`);
         if (!settled) fail(reason);
         if (this.child === child) {
@@ -76,12 +79,17 @@ export class RemoteClient extends EventEmitter {
           if (this.state === 'connected') this.setState('disconnected', { error: reason.message });
         }
       });
-      createLineReader(child.stdout, (msg) => {
+      const current = () => this.child === child; // ignore a child we already dropped
+      createLineReader(
+        child.stdout,
+        (msg) => {
+        if (!msg || typeof msg !== 'object' || !current()) return;
         if (msg.method === 'hello') {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
           this.connecting = null;
+          this.abortConnect = null;
           this.setState('connected', { info: msg.params, error: null });
           resolve(msg.params);
           return;
@@ -91,15 +99,28 @@ export class RemoteClient extends EventEmitter {
         if (!entry) return;
         this.pending.delete(msg.id);
         clearTimeout(entry.timer);
-        if (msg.error) entry.reject(Object.assign(new Error(msg.error.message), msg.error));
+        if (msg.error && typeof msg.error === 'object') entry.reject(Object.assign(new Error(String(msg.error.message)), { code: Number(msg.error.code) || -32000, data: msg.error.data }));
         else entry.resolve(msg.result);
-      });
+        },
+        {
+          onError: (err) => {
+            this.stderrTail = `${this.stderrTail}\n[protocol] ${err.message}`.slice(-8000);
+            // A dropped oversized message would leave its caller hanging: fail the session instead.
+            if (err.oversize && current()) {
+              this.rejectAll(err);
+              this.close();
+            }
+          },
+        },
+      );
     });
     return this.connecting;
   }
 
   async call(method, params = {}, { timeoutMs = CALL_TIMEOUT_MS } = {}) {
     await this.connect();
+    const child = this.child;
+    if (!child || !child.stdin.writable) throw Object.assign(new Error('remote session is not connected'), { code: -32010 });
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -107,7 +128,7 @@ export class RemoteClient extends EventEmitter {
         reject(Object.assign(new Error(`remote call ${method} timed out`), { code: -32010 }));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      writeLine(this.child.stdin, { jsonrpc: '2.0', id, method, params });
+      writeLine(child.stdin, { jsonrpc: '2.0', id, method, params });
     });
   }
 
@@ -128,6 +149,8 @@ export class RemoteClient extends EventEmitter {
   }
 
   close() {
+    this.abortConnect?.(); // settles an in-flight connect() instead of leaving it to the timeout
+    this.abortConnect = null;
     this.rejectAll(new Error('remote session closed'));
     this.kill();
     this.connecting = null;

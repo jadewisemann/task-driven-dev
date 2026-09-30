@@ -11,6 +11,38 @@ const SSH_TARGET = /^(?!-)[A-Za-z0-9._%+-]+(@[A-Za-z0-9._\-[\]:]+)?$/;
 /** Remote command run by the remote login shell; restricted to a safe charset. */
 const REMOTE_COMMAND = /^[A-Za-z0-9_./~ =:@+-]+$/;
 const shellQuote = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
+/** Quotes a remote path but keeps a leading ~/ expandable by the remote shell. */
+const remotePath = (p) => (p === '~' ? '~' : p.startsWith('~/') ? `~/${shellQuote(p.slice(2))}` : shellQuote(p));
+
+/**
+ * ssh -o options a peer may set. Anything that makes ssh run local commands
+ * (ProxyCommand, LocalCommand, KnownHostsCommand, Match exec, Include …) is refused.
+ */
+const SAFE_SSH_OPTIONS = new Set([
+  'port', 'user', 'connecttimeout', 'connectionattempts', 'serveraliveinterval', 'serveralivecountmax', 'stricthostkeychecking',
+  'userknownhostsfile', 'identitiesonly', 'identityfile', 'compression', 'proxyjump', 'addressfamily', 'hostkeyalias', 'loglevel',
+  'preferredauthentications', 'pubkeyauthentication', 'forwardagent', 'tcpkeepalive', 'controlmaster', 'controlpath', 'controlpersist',
+]);
+
+function validateSshArgs(args) {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    let opt = null;
+    if (a === '-o') opt = args[++i];
+    else if (a.startsWith('-o')) opt = a.slice(2);
+    else if (a === '-J') {
+      const jump = args[++i];
+      if (!jump || !SSH_TARGET.test(jump)) throw invalidParams('-J needs a user@host jump target');
+      out.push('-J', jump);
+      continue;
+    } else throw invalidParams(`sshArgs: only -o Key=Value and -J host are allowed (got "${a}")`);
+    const key = String(opt || '').split(/[=\s]/)[0].toLowerCase();
+    if (!SAFE_SSH_OPTIONS.has(key)) throw invalidParams(`sshArgs: ssh option "${key || opt}" is not allowed`);
+    out.push('-o', opt);
+  }
+  return out;
+}
 
 const mapRow = (r) =>
   r && {
@@ -36,7 +68,7 @@ export function transportSpec(peer) {
     if (!command) throw invalidParams('exec transport needs a command');
     return { command, args, display: peer.target };
   }
-  const remote = [peer.remoteCommand || 'todo-devs', 'rpc', ...(o.remoteHome ? ['--home', shellQuote(o.remoteHome)] : [])].join(' ');
+  const remote = [peer.remoteCommand || 'todo-devs', 'rpc', ...(o.remoteHome ? ['--home', remotePath(o.remoteHome)] : [])].join(' ');
   const args = [
     '-T',
     '-o',
@@ -76,9 +108,13 @@ function validatePeer(p, { partial = false } = {}) {
     if (o.port !== undefined && o.port !== null) check.number(o, 'port', { min: 1, max: 65535, integer: true });
     if (o.identityFile !== undefined && o.identityFile !== null) check.string(o, 'identityFile');
     if (o.remoteHome !== undefined && o.remoteHome !== null) check.string(o, 'remoteHome');
-    if (o.sshCommand !== undefined && o.sshCommand !== null) check.string(o, 'sshCommand');
-    if (o.sshArgs !== undefined) check.stringArray(o, 'sshArgs');
-    out.options = Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== ''));
+    if (o.sshCommand !== undefined && o.sshCommand !== null) {
+      // An alternative ssh binary (e.g. a specific OpenSSH build) — must still be an ssh.
+      if (!/(^|\/)ssh(\.exe)?$/.test(check.string(o, 'sshCommand'))) throw invalidParams('sshCommand must point to an ssh binary');
+    }
+    const cleaned = { ...o };
+    if (o.sshArgs !== undefined) cleaned.sshArgs = validateSshArgs(check.stringArray(o, 'sshArgs'));
+    out.options = Object.fromEntries(Object.entries(cleaned).filter(([, v]) => v !== null && v !== ''));
   }
   return out;
 }
@@ -109,7 +145,17 @@ export function createPeerManager({ db, bus, log = console.error }) {
     let c = clients.get(peer.id);
     if (!c) {
       c = new RemoteClient(transportSpec(peer));
-      c.on('event', (event) => bus.forward({ ...event, peer: peer.id }));
+      // Rebuild relayed events field by field: nothing from the remote is passed through verbatim.
+      c.on('event', (event) => {
+        if (!event || typeof event !== 'object' || typeof event.type !== 'string') return;
+        bus.relay({
+          seq: Number.isFinite(event.seq) ? event.seq : 0,
+          type: event.type.slice(0, 100),
+          ts: typeof event.ts === 'string' ? event.ts.slice(0, 40) : new Date().toISOString(),
+          payload: event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload) ? event.payload : {},
+          peer: peer.id,
+        });
+      });
       c.on('status', (status) => bus.publish('peer.status', { peerId: peer.id, name: peer.name, ...status }));
       clients.set(peer.id, c);
     }
@@ -150,6 +196,7 @@ export function createPeerManager({ db, bus, log = console.error }) {
       const v = validatePeer(input, { partial: true });
       const next = { ...cur, ...v };
       checkTarget(next);
+      if (next.name !== cur.name && db.get('SELECT 1 AS x FROM peers WHERE name = ? AND id <> ?', [next.name, cur.id])) throw conflict(`A peer named "${next.name}" already exists`);
       db.run('UPDATE peers SET name = ?, transport = ?, target = ?, remote_command = ?, options = ?, updated_at = ? WHERE id = ?', [next.name, next.transport, next.target, next.remoteCommand, toJson(next.options), now(), cur.id]);
       drop(cur.id); // reconnect with the new settings
       bus.publish('peer.updated', { peer: store.get(cur.id) });

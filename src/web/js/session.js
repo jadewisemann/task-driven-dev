@@ -13,6 +13,11 @@ export async function sessionSlot(el, { showError }) {
 
   async function refresh() {
     [localInfo, peers] = await Promise.all([localInfo ? localInfo : rpcLocal('system.info'), rpcLocal('peers.list')]);
+    // The active peer was removed (another tab, the CLI): fall back to the local session.
+    if (getPeer() && !peers.some((p) => p.id === getPeer())) {
+      toast('The remote session was removed — back to local', 'error');
+      setPeer(null);
+    }
     render();
   }
 

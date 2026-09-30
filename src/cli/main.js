@@ -1,5 +1,5 @@
 import { runBridge } from '../remote/bridge.js';
-import { callRpc } from './client.js';
+import { openSession } from './client.js';
 import { serve } from './serve.js';
 
 const HELP = `todo.devs — agent kanban with dependency scheduling, orchestration and remote sessions
@@ -54,10 +54,35 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** @returns {Promise<number|void>} exit code */
 export async function runCli(positionals, flags) {
+  const [command] = positionals;
+  if (command === 'serve' || command === 'rpc' || command === 'help' || command === undefined) return runCommand(positionals, flags, null);
+  if (flags.peer === true) throw new Error('--peer needs a peer name');
+  const session = await openSession({ home: flags.home });
+  try {
+    return await runCommand(positionals, flags, session);
+  } finally {
+    await session.close();
+  }
+}
+
+async function runCommand(positionals, flags, session) {
   const [command, ...rest] = positionals;
-  const call = (method, params) => callRpc({ home: flags.home, method, params, peer: flags.peer });
-  const local = (method, params) => callRpc({ home: flags.home, method, params });
+  const call = (method, params) => session.call(method, params, flags.peer);
+  const local = (method, params) => session.call(method, params);
   const projectId = async () => flags.project || (await call('projects.list', {}))[0]?.id;
+
+  /**
+   * Scheduling and planning keep running after the call returns, so they need a
+   * long-lived server on whichever machine executes them.
+   */
+  async function requirePersistentBackend(what) {
+    if (flags.peer) {
+      const { info } = await local('peers.connect', { id: flags.peer });
+      if (info.mode !== 'daemon') throw new Error(`${what} needs a running server on ${flags.peer}: run \`todo-devs serve\` there first`);
+    } else if (session.mode !== 'daemon') {
+      throw new Error(`${what} needs a running server: start \`todo-devs serve\` (in another terminal or as a service) first`);
+    }
+  }
 
   switch (command) {
     case 'serve': {
@@ -102,11 +127,14 @@ export async function runCli(positionals, flags) {
     }
     case 'plan': {
       if (!rest[0]) throw new Error('usage: todo-devs plan "<goal>" [--run] [--wait]');
+      await requirePersistentBackend('Planning');
       const pid = await projectId();
       let plan = await call('orchestrator.plan', { projectId: pid, goal: rest.join(' '), autoRun: flags.run === true, reviewPolicy: flags['auto-approve'] ? 'auto-approve' : 'wait' });
       console.log(`plan ${plan.id}: planning…`);
-      const until = flags.wait ? ['finished', 'incomplete', 'failed', 'discarded'] : flags.run ? ['running', 'failed', 'finished', 'incomplete'] : ['draft', 'failed'];
+      const until = flags.run ? (flags.wait ? ['finished', 'incomplete', 'failed', 'discarded'] : ['running', 'failed', 'finished', 'incomplete', 'discarded']) : ['draft', 'failed', 'discarded'];
+      const deadline = Date.now() + (Number(flags.timeout) || 3600) * 1000;
       while (!until.includes(plan.status)) {
+        if (Date.now() > deadline) throw new Error(`plan ${plan.id} still ${plan.status} after ${Number(flags.timeout) || 3600}s`);
         await sleep(1000);
         plan = await call('orchestrator.get', { planId: plan.id });
       }
@@ -119,6 +147,7 @@ export async function runCli(positionals, flags) {
       return plan.status === 'failed' ? 1 : 0;
     }
     case 'run':
+      await requirePersistentBackend('Running the scheduler');
       print(await call('scheduler.start', { projectId: await projectId(), concurrency: Number(flags.concurrency) || 2, reviewPolicy: flags['auto-approve'] ? 'auto-approve' : 'wait' }), flags);
       return 0;
     case 'stop':
@@ -153,7 +182,7 @@ export async function runCli(positionals, flags) {
       }
       if (sub === 'ping') {
         const res = await local('peers.ping', { id: name });
-        const info = await callRpc({ home: flags.home, method: 'system.info', peer: name });
+        const info = await session.call('system.info', {}, name);
         console.log(`${name}: ${info.host} (todo.devs ${info.version}) — ${res.latencyMs} ms`);
         return 0;
       }

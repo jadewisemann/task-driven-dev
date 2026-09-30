@@ -82,7 +82,9 @@ function openEventStream(req, res, app) {
     'x-accel-buffering': 'no',
   });
   res.write('retry: 2000\n\n');
-  const unsubscribe = app.bus.subscribe((event) => res.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`));
+  // JSON.stringify never emits raw newlines, and `id:` is only written for numeric seqs,
+  // so relayed (remote) content cannot inject extra SSE frames.
+  const unsubscribe = app.bus.subscribeAll((event) => res.write(`${Number.isFinite(event.seq) ? `id: ${event.seq}\n` : ''}data: ${JSON.stringify(event)}\n\n`));
   const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
   const close = () => {
     clearInterval(heartbeat);
