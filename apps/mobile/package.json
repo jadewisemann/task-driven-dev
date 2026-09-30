@@ -8,7 +8,9 @@
     "start": "expo start",
     "ios": "expo run:ios",
     "android": "expo run:android",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/*.test.ts\"",
+    "export": "expo export --platform ios --platform android"
   },
   "dependencies": {
     "expo": "~57.0.3",

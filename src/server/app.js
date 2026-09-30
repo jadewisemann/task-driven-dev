@@ -108,7 +108,10 @@ export function createApp(options = {}) {
       return response.result;
     },
 
+    /** Idempotent: a second call is a no-op. */
     async close() {
+      if (app.closed) return;
+      app.closed = true;
       for (const dispose of app.disposers.splice(0).reverse()) {
         try {
           await dispose();
