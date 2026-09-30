@@ -342,3 +342,57 @@ textarea.invalid { border-color: var(--danger); }
 .wf-runpanel { border-top: 1px solid var(--border); padding: 0 14px; max-height: 240px; }
 .wf-runpanel:not(:empty) { padding: 10px 14px; }
 .wf-run-head { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }
+
+/* orchestrator / flow */
+.composer { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; border-color: #3a3170; background: linear-gradient(180deg, #1a1830, var(--panel)); }
+.composer-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.composer textarea { font-size: 15px; }
+.composer-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.composer-actions .spacer, .flow-toolbar .spacer { flex: 1; }
+label.inline { display: inline-flex; gap: 6px; align-items: center; }
+label.inline select { width: auto; max-width: 320px; }
+.plan-box:not(:empty) { margin-bottom: 12px; }
+.plan-card { display: flex; flex-direction: column; gap: 10px; }
+.plan-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.plan-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.plan-table th { text-align: left; font-weight: 500; color: var(--muted); font-size: 11px; text-transform: uppercase; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+.plan-table td { padding: 5px 6px; border-bottom: 1px solid #1f2333; vertical-align: top; }
+.plan-table input, .plan-table select { padding: 4px 6px; }
+.warnings { margin: 0; padding-left: 18px; }
+.flow-layout { display: grid; grid-template-columns: 1fr 400px; gap: 12px; align-items: start; }
+.flow-main { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.flow-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.flow-toolbar select { width: auto; }
+.progress.wide { width: 220px; }
+.flow-canvas { overflow: auto; min-height: 320px; max-height: 64vh; padding: 0; background: radial-gradient(circle, #1f2338 1px, transparent 1px) 0 0 / 20px 20px, var(--panel); }
+.dag { position: relative; }
+.dag-edges { position: absolute; left: 0; top: 0; pointer-events: none; }
+.dag-edge { fill: none; stroke: #3f4665; stroke-width: 2; }
+.dag-edge.satisfied { stroke: var(--st-done); }
+.dag-edge.broken { stroke: var(--st-failed); stroke-dasharray: 5 4; }
+.dag-node { position: absolute; text-align: left; background: var(--panel-2); border: 1px solid var(--border); border-left: 4px solid var(--st-backlog); border-radius: 9px; padding: 7px 10px; cursor: pointer; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+.dag-node:hover { border-color: #4a5275; }
+.dag-node.selected { box-shadow: 0 0 0 2px var(--accent); }
+.dag-node.status-todo { border-left-color: var(--st-todo); }
+.dag-node.status-running { border-left-color: var(--st-running); animation: pulse 1.6s infinite; }
+.dag-node.status-review { border-left-color: var(--st-review); }
+.dag-node.status-done { border-left-color: var(--st-done); }
+.dag-node.status-failed { border-left-color: var(--st-failed); }
+.dag-node.status-blocked { border-left-color: var(--st-blocked); opacity: 0.75; }
+.dag-top { display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--muted); text-transform: uppercase; }
+.dag-title { font-weight: 500; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dag-agent { display: flex; gap: 6px; align-items: center; }
+.dag-agent .complexity { margin-left: auto; }
+.flow-side { position: sticky; top: 0; max-height: calc(100vh - 100px); overflow-y: auto; }
+.side-head { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.plan-history h4 { margin-top: 6px; }
+.plan-item summary { color: var(--text); font-size: 13px; }
+.plan-finished { color: var(--st-done); border-color: var(--st-done); }
+.plan-running { color: var(--st-running); border-color: var(--st-running); }
+.plan-discarded { color: var(--muted); }
+.composer-actions select, .flow-toolbar select { width: auto; max-width: 320px; }
+.plan-head .spacer { flex: 1; }
+.plan-card + .plan-card { margin-top: 10px; }
+.desc-row td { border-bottom: 1px solid var(--border); padding-top: 0; }
+.plan-desc { font-size: 12px; color: #c3c7d4; }
+.plan-incomplete { color: var(--st-failed); border-color: var(--st-failed); }

@@ -13,6 +13,7 @@ import { createRunner } from './runtime/runner.js';
 import { createScheduler } from './runtime/scheduler.js';
 import { registerRuntimeRpc } from './runtime/rpc.js';
 import { createWorkflowRunner, createWorkflowService, registerWorkflowRpc } from './domain/workflows.js';
+import { createOrchestrator, registerOrchestratorRpc } from './orchestrator/orchestrator.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
 
@@ -48,6 +49,8 @@ export function createApp(options = {}) {
   const wfRunner = createWorkflowRunner({ bus, services, runner, runs, home, log });
   runner.agentGraphExecutor = wfRunner.executeAgentGraph;
   runner.onCancelRun = wfRunner.cancel; // runs.cancel also reaches standalone workflow runs
+  const orchestrator = createOrchestrator({ db, bus, services, runner, runs, scheduler, log });
+  if (options.recover) orchestrator.recoverInterrupted();
   if (options.recover) runner.recoverInterrupted();
 
   const app = {
@@ -62,10 +65,12 @@ export function createApp(options = {}) {
     runner,
     scheduler,
     wfRunner,
+    orchestrator,
     /** Hooks run on shutdown (child processes, remote connections, timers). */
     disposers: [
       async () => {
         scheduler.stopAll();
+        orchestrator.abortAll();
         await Promise.all([runner.cancelAll(), wfRunner.cancelAll()]);
         runs.close(); // late output from runs that outlived the wait is dropped, never written to a closed DB
       },
@@ -105,6 +110,7 @@ export function createApp(options = {}) {
   registerAgentRpc(rpc, { agents, tasks, projects });
   registerRuntimeRpc(rpc, { runner, scheduler, runs, services, log });
   registerWorkflowRpc(rpc, { workflows, wfRunner, services });
+  registerOrchestratorRpc(rpc, orchestrator);
 
   return app;
 }
