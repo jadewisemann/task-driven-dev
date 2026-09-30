@@ -1,10 +1,23 @@
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants } from 'node:fs';
+import { accessSync, constants, existsSync } from 'node:fs';
 import { listHarnesses } from '../harness/registry.js';
+import { openReadOnly } from './db.js';
+import { dbPath } from './paths.js';
 
 const MIN_NODE = [22, 13];
 
+/** Tool probes are cached for a minute: Settings may call doctor often, and they block briefly. */
+const probeCache = new Map();
 function which(cmd, args = ['--version']) {
+  const key = `${cmd} ${args.join(' ')}`;
+  const hit = probeCache.get(key);
+  if (hit && Date.now() - hit.at < 60_000) return hit.value;
+  const value = probe(cmd, args);
+  probeCache.set(key, { at: Date.now(), value });
+  return value;
+}
+
+function probe(cmd, args) {
   try {
     const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 5000 });
     if (r.error) return null;
@@ -23,7 +36,7 @@ const check = (id, label, status, detail, fix) => ({ id, label, status, detail, 
  *
  * @param {{app?: object, home: string, daemon?: object|null}} ctx
  */
-export function runDoctor({ app, home, daemon }) {
+export function runDoctor({ app, home, daemon, servicePaths = null }) {
   const checks = [];
   const [major, minor] = process.versions.node.split('.').map(Number);
   const nodeOk = major > MIN_NODE[0] || (major === MIN_NODE[0] && minor >= MIN_NODE[1]);
@@ -31,8 +44,8 @@ export function runDoctor({ app, home, daemon }) {
 
   const git = which('git');
   checks.push(check('git', 'git', git ? 'ok' : 'warn', git || 'not found', git ? null : 'Install git to run tasks in worktrees'));
-  const sh = which('sh', ['-c', 'echo ok']);
-  checks.push(check('sh', 'POSIX shell', sh ? 'ok' : 'warn', sh ? '/bin/sh' : 'not found', sh ? null : 'Shell harness and Shell nodes need sh'));
+  const sh = which('sh', ['-c', 'command -v sh']);
+  checks.push(check('sh', 'POSIX shell', sh ? 'ok' : 'warn', sh || 'not found', sh ? null : 'Shell harness and Shell nodes need sh'));
   const ssh = which('ssh', ['-V']);
   checks.push(check('ssh', 'ssh (remote sessions)', ssh ? 'ok' : 'warn', ssh || 'not found', ssh ? null : 'Install OpenSSH to use remote sessions'));
 
@@ -44,14 +57,30 @@ export function runDoctor({ app, home, daemon }) {
   }
   checks.push(check('home', 'Data directory', writable ? 'ok' : 'fail', home, writable ? null : `Make ${home} writable or use --home`));
 
-  if (app) {
-    try {
-      const res = app.db.get('PRAGMA integrity_check');
-      const ok = res && Object.values(res)[0] === 'ok';
-      checks.push(check('db', 'Database integrity', ok ? 'ok' : 'fail', ok ? 'ok' : JSON.stringify(res), ok ? null : 'Restore a backup: todo-devs restore <file>'));
-    } catch (err) {
-      checks.push(check('db', 'Database integrity', 'fail', err.message));
+  // quick_check: catches corruption without the full index scan of integrity_check.
+  const quickCheck = (db) => Object.values(db.prepare ? db.prepare('PRAGMA quick_check').get() : db.get('PRAGMA quick_check'))[0];
+  try {
+    let result = null;
+    if (app) result = quickCheck(app.db);
+    else if (existsSync(dbPath(home))) {
+      const ro = openReadOnly(dbPath(home));
+      try {
+        result = quickCheck(ro);
+      } finally {
+        ro.close();
+      }
     }
+    if (result !== null) checks.push(check('db', 'Database', result === 'ok' ? 'ok' : 'fail', result === 'ok' ? 'healthy' : String(result), result === 'ok' ? null : 'Restore a backup: todo-devs restore <file>'));
+  } catch (err) {
+    checks.push(check('db', 'Database', 'fail', err.message, 'Restore a backup: todo-devs restore <file>'));
+  }
+
+  if (servicePaths) {
+    checks.push(
+      servicePaths.ok
+        ? check('service', 'Login service', 'ok', servicePaths.file)
+        : check('service', 'Login service', 'fail', `points at a missing ${!existsSync(servicePaths.node || '') ? `node (${servicePaths.node})` : `script (${servicePaths.bin})`}`, 'Re-run `todo-devs service install` (e.g. after a Node upgrade)'),
+    );
   }
 
   const harnesses = listHarnesses().filter((h) => h.binary && !['sh'].includes(h.binary));

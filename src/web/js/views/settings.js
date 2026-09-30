@@ -9,9 +9,13 @@ export const settingsView = {
   icon: '⚙',
   mount(root, ctx) {
     async function load() {
-      const [info, doctor] = await Promise.all([ctx.rpc('system.info'), ctx.rpc('system.doctor')]);
+      // A remote peer on an older build may not have system.doctor: show the rest anyway.
+      const [infoRes, doctorRes] = await Promise.allSettled([ctx.rpc('system.info'), ctx.rpc('system.doctor')]);
+      if (infoRes.status === 'rejected') throw infoRes.reason;
+      const info = infoRes.value;
+      const doctor = doctorRes.status === 'fulfilled' ? doctorRes.value : { summary: 'unavailable', checks: [] };
       const copy = (text) => () => navigator.clipboard?.writeText(text).then(() => toast('Copied', 'success'), () => toast(text));
-      const cmd = (text) => h('div', { class: 'pair-row' }, h('code', {}, text), h('button', { class: 'btn small ghost', onClick: copy(text) }, 'Copy'));
+      const cmd = (text, note) => h('div', { class: 'pair-row' }, h('code', {}, text), h('button', { class: 'btn small ghost', onClick: copy(text) }, 'Copy'), note ? h('span', { class: 'muted small' }, note) : null);
       mountInto(
         root,
         h('div', { class: 'toolbar' }, h('div', { class: 'toolbar-title' }, h('h2', {}, 'Settings'), h('span', { class: 'badge alpha-badge' }, `alpha · v${info.version}`))),
@@ -57,10 +61,10 @@ export const settingsView = {
           h('h4', {}, 'Run in the background'),
           h('p', { class: 'small muted' }, 'Start todo.devs automatically when you log in (launchd on macOS, systemd on Linux):'),
           cmd('todo-devs service install'),
-          cmd('todo-devs service install --host 0.0.0.0   # also reachable from your phone'),
+          cmd('todo-devs service install --host 0.0.0.0', 'also reachable from your phone'),
           h('h4', {}, 'Backups'),
           cmd('todo-devs backup'),
-          cmd('todo-devs restore <file>   # with the server stopped'),
+          cmd('todo-devs restore FILE', 'with the server stopped'),
         ),
       );
     }

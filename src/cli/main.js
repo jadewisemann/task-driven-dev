@@ -5,7 +5,7 @@ import { rotateToken } from '../server/core/auth.js';
 import { readDaemonInfo, resolveHome } from '../server/core/paths.js';
 import { serve } from './serve.js';
 import { backup, restore } from './backup.js';
-import { installService, serviceSpec, serviceStatus, uninstallService } from './service.js';
+import { installService, installedServicePaths, serviceSpec, serviceStatus, uninstallService } from './service.js';
 import { runDoctor } from '../server/core/doctor.js';
 import { readFileSync } from 'node:fs';
 
@@ -44,7 +44,7 @@ Operations
                                             Start on login (launchd on macOS, systemd --user on Linux)
   todo-devs service status | uninstall
   todo-devs backup [--out FILE]             Snapshot the database (safe while running)
-  todo-devs restore FILE                    Replace the database (server must be stopped)
+  todo-devs restore FILE [--force]          Replace the database (server must be stopped)
   todo-devs --version
 
 Low level
@@ -82,7 +82,9 @@ export async function runCli(positionals, flags) {
     console.log(VERSION);
     return 0;
   }
-  if (['serve', 'rpc', 'help', 'pair', 'token', 'service', 'backup', 'restore', 'doctor', undefined].includes(command)) return runCommand(positionals, flags, null);
+  const localOnly = ['serve', 'rpc', 'pair', 'token', 'service', 'backup', 'restore', 'doctor'];
+  if (flags.peer && localOnly.includes(command)) throw new Error(`\`${command}\` works on this machine only — run it on the remote machine instead of using --peer`);
+  if ([...localOnly, 'help', undefined].includes(command)) return runCommand(positionals, flags, null);
   if (flags.peer === true) throw new Error('--peer needs a peer name');
   const session = await openSession({ home: flags.home });
   try {
@@ -150,8 +152,11 @@ async function runCommand(positionals, flags, session) {
         } finally {
           await session.close();
         }
-      } else report = runDoctor({ home, daemon: null });
-      if (flags.json) return print(report, flags);
+      } else report = runDoctor({ home, daemon: null, servicePaths: installedServicePaths() });
+      if (flags.json) {
+        print(report, flags);
+        return report.summary === 'fail' ? 1 : 0;
+      }
       const icon = { ok: '✓', warn: '!', fail: '✗' };
       console.log(`todo.devs ${VERSION} (${process.platform}, node ${process.versions.node})`);
       for (const c of report.checks) console.log(`${icon[c.status]} ${c.label}: ${c.detail}${c.fix ? `\n    → ${c.fix}` : ''}`);
@@ -166,7 +171,7 @@ async function runCommand(positionals, flags, session) {
           console.log(`# ${spec.file}\n${spec.content}`);
           return 0;
         }
-        const res = installService(opts);
+        const res = await installService(opts);
         console.log(`installed ${res.file}\n${res.steps.join('\n')}\nlogs: ${res.log}\nopen http://127.0.0.1:${opts.port}`);
         return 0;
       }
@@ -190,7 +195,7 @@ async function runCommand(positionals, flags, session) {
     }
     case 'restore': {
       if (!rest[0]) throw new Error('usage: todo-devs restore FILE');
-      const res = restore(resolveHome(flags.home), rest[0]);
+      const res = restore(resolveHome(flags.home), rest[0], { force: flags.force === true });
       console.log(`restored ${res.restored}${res.previous ? `\nprevious database kept as ${res.previous}` : ''}`);
       return 0;
     }

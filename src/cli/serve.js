@@ -3,6 +3,7 @@ import { PairingCodes, loadOrCreateToken } from '../server/core/auth.js';
 import { createHttpServer } from '../server/http/server.js';
 import { clearDaemonInfo, writeDaemonInfo } from '../server/core/paths.js';
 import { pairingInfo } from './pairing.js';
+import { installedServicePaths } from './service.js';
 
 const LOOPBACK = ['127.0.0.1', 'localhost', '::1'];
 
@@ -13,14 +14,22 @@ const LOOPBACK = ['127.0.0.1', 'localhost', '::1'];
  */
 export async function serve({ home, port = 7420, host = '127.0.0.1', allowedHosts = [], token }) {
   const app = createApp({ home, recover: true });
+  app.servicePaths = () => installedServicePaths();
   const networked = !LOOPBACK.includes(host);
   if (networked && !token) token = loadOrCreateToken(app.home);
   const pairing = token ? new PairingCodes(token) : null;
   const server = createHttpServer(app, { allowedHosts, token, pairing });
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(Number(port), host, resolve);
-  });
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(Number(port), host, resolve);
+    });
+  } catch (err) {
+    if (err.code !== 'EADDRINUSE') throw err;
+    console.error(`error: port ${port} is already in use (another todo-devs serve?). Stop it or use --port.`);
+    await app.close();
+    process.exit(3); // EXIT_PORT_IN_USE: the service manager does not retry this
+  }
   const address = server.address();
   const daemon = { port: address.port, host, token: token || null };
   writeDaemonInfo(app.home, daemon);
