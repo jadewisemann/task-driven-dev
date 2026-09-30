@@ -55,7 +55,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # Uses package-lock.json when present, otherwise resolves SDK-compatible versions.
+      # package-lock.json pins the versions verified here; `npm run setup` re-resolves them for an SDK upgrade.
       - name: Install
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm run setup; fi
@@ -65,7 +65,6 @@ jobs:
         run: npm test
       - name: Expo doctor
         run: npx expo-doctor
-        continue-on-error: true
       - name: Bundle for iOS and Android
         run: npm run export
       - name: Upload resolved dependency manifest
