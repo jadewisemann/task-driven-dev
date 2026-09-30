@@ -1,4 +1,4 @@
-import { getPeer, onEvent, onLocalEvent, onPeerChange, rpc, rpcLocal } from './api.js';
+import { getPeer, onEvent, onLocalEvent, onPeerChange, ready, rpc, rpcLocal } from './api.js';
 import { h, mountInto, promptForm, toast } from './dom.js';
 import { views } from './views/index.js';
 import { sessionSlot } from './session.js';
@@ -117,6 +117,7 @@ function route() {
 }
 
 async function boot() {
+  await ready.catch((err) => showError(new Error(`Pairing failed: ${err.message} — create a new link with \`todo-devs pair\``)));
   sessionSlot(els.sessionSlot, { showError });
   try {
     await loadProjects();

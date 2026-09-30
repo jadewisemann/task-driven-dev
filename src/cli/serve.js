@@ -1,27 +1,43 @@
-import { randomBytes } from 'node:crypto';
 import { createApp } from '../server/app.js';
+import { PairingCodes, loadOrCreateToken } from '../server/core/auth.js';
 import { createHttpServer } from '../server/http/server.js';
 import { clearDaemonInfo, writeDaemonInfo } from '../server/core/paths.js';
+import { pairingInfo } from './pairing.js';
 
 const LOOPBACK = ['127.0.0.1', 'localhost', '::1'];
 
 /**
  * Starts the HTTP server + web UI and records it in <home>/daemon.json.
- * Binding outside loopback always requires an access token (generated if absent).
+ * Binding outside loopback always requires an access token: --token, or the
+ * one persisted in <home>/auth.json (so paired phones keep working across restarts).
  */
 export async function serve({ home, port = 7420, host = '127.0.0.1', allowedHosts = [], token }) {
-  if (!LOOPBACK.includes(host) && !token) token = randomBytes(18).toString('base64url');
   const app = createApp({ home, recover: true });
-  const server = createHttpServer(app, { allowedHosts, token });
+  const networked = !LOOPBACK.includes(host);
+  if (networked && !token) token = loadOrCreateToken(app.home);
+  const pairing = token ? new PairingCodes(token) : null;
+  const server = createHttpServer(app, { allowedHosts, token, pairing });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(Number(port), host, resolve);
   });
   const address = server.address();
-  writeDaemonInfo(app.home, { port: address.port, host, token: token || null });
-  const shown = LOOPBACK.includes(host) ? host : '<this-host>';
-  console.log(`todo.devs ${app.version} listening on http://${shown}:${address.port}${token ? `/?token=${token}` : ''}`);
+  const daemon = { port: address.port, host, token: token || null };
+  writeDaemonInfo(app.home, daemon);
+
+  // Each call mints a fresh one-time code; the long-lived token itself is never handed out.
+  app.rpc.register(
+    'system.pairing',
+    () => (pairing ? pairingInfo(daemon, pairing.create()) : pairingInfo(daemon)),
+    'One-time pairing links for the mobile app / other browsers (network mode only)',
+  );
+
+  console.log(`todo.devs ${app.version} listening on http://${networked ? '<this-host>' : host}:${address.port}`);
   console.log(`data: ${app.home}`);
+  if (networked) {
+    console.log('network mode: API calls need the access token. Pair a phone or browser with `todo-devs pair`.');
+    if (allowedHosts.length) console.log('note: --allow-host is ignored in network mode (the token authorises requests).');
+  }
 
   let closing = false;
   const shutdown = async () => {

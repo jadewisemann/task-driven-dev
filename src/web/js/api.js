@@ -10,13 +10,26 @@ const localListeners = new Set();
 const peerListeners = new Set();
 let source = null;
 
-// Access token (only needed when the server binds outside loopback): ?token=... once, then kept for the tab.
-const urlToken = new URLSearchParams(location.search).get('token');
-if (urlToken) {
-  sessionStorage.setItem(TOKEN_KEY, urlToken);
-  history.replaceState(null, '', location.pathname + location.hash);
-}
-const token = sessionStorage.getItem(TOKEN_KEY);
+// Access token (only needed when the server listens on the network). Obtained by
+// redeeming a one-time pairing link (#pair=CODE); legacy ?token= / #token= links still work.
+// It is kept for the tab only and removed from the address bar immediately.
+const params = new URLSearchParams(location.search);
+const hash = new URLSearchParams(location.hash.slice(1).includes('=') ? location.hash.slice(1) : '');
+const linkToken = params.get('token') || hash.get('token');
+if (linkToken) sessionStorage.setItem(TOKEN_KEY, linkToken);
+const pairCode = hash.get('pair');
+if (linkToken || pairCode) history.replaceState(null, '', location.pathname);
+let token = sessionStorage.getItem(TOKEN_KEY);
+
+/** Exchanges a pairing code for the token before anything else talks to the API. */
+export const ready = (async () => {
+  if (!pairCode) return;
+  const res = await fetch('/api/pair', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: pairCode }) });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.token) throw new Error(body.error || 'Pairing failed');
+  token = body.token;
+  sessionStorage.setItem(TOKEN_KEY, token);
+})();
 
 export class ApiError extends Error {
   constructor(error) {
@@ -27,6 +40,7 @@ export class ApiError extends Error {
 }
 
 async function send(method, params, peer) {
+  await ready.catch(() => {});
   const res = await fetch('/api/rpc', {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...(token ? { 'x-todo-devs-token': token } : {}) },
@@ -53,8 +67,10 @@ function emit(event) {
   }
 }
 
-function connect() {
+async function connect() {
   if (source) return;
+  source = true; // reserve while pairing completes
+  await ready.catch(() => {});
   source = new EventSource(`/api/events${token ? `?token=${encodeURIComponent(token)}` : ''}`);
   let opened = false;
   source.onopen = () => {

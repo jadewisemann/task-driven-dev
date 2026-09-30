@@ -417,3 +417,5 @@ body.remote-active .topbar { box-shadow: inset 0 -2px 0 var(--accent-2); }
 .help-panel { margin-top: 16px; }
 .help-panel ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
 code { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+.pair-row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+.pair-row .muted { min-width: 220px; }
