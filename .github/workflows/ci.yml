@@ -1,0 +1,195 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'feat/**']
+  pull_request:
+  workflow_dispatch:
+  # release.yml runs the whole suite (and reuses its APK / simulator build) before publishing
+  workflow_call:
+
+concurrency:
+  # push + pull_request for the same branch share a group, so only the newest run is kept
+  group: ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: Server · ${{ matrix.os }} · Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node --version && git --version
+      # The server has no dependencies: nothing to install.
+      - run: npm test
+
+  e2e:
+    name: Web UI (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-save playwright
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+
+  mobile:
+    name: Mobile app (Expo)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # package-lock.json pins the versions verified here; `npm run setup` re-resolves them for an SDK upgrade.
+      - name: Install
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm run setup; fi
+      - name: Type-check
+        run: npx tsc --noEmit
+      - name: Core tests (against a real server from this repo)
+        run: npm test
+      - name: Expo doctor
+        run: npx expo-doctor
+      - name: Bundle for iOS and Android
+        run: npm run export
+      - name: Upload resolved dependency manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-dependencies
+          path: |
+            apps/mobile/package.json
+            apps/mobile/package-lock.json
+          if-no-files-found: ignore
+
+  android:
+    name: Android APK + emulator smoke test (Maestro)
+    # Slow native jobs: on PRs, main, release tags and manual runs — not on every feature-branch push.
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/heads/feat/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+          cache-dependency-path: apps/mobile/package-lock.json
+      - name: Install
+        working-directory: apps/mobile
+        run: npm ci
+      - name: Generate the native project
+        working-directory: apps/mobile
+        run: npx expo prebuild --platform android --no-install
+      # The Expo template signs release builds with the debug keystore: fine for sideloaded alpha builds.
+      - name: Build release APK
+        working-directory: apps/mobile/android
+        run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,x86_64
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+      - name: Install Maestro
+        run: |
+          curl -fsSL "https://get.maestro.mobile.dev" | MAESTRO_VERSION=2.10.0 bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Emulator smoke test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: bash .github/scripts/android-e2e.sh apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+      - name: Upload test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-e2e-output
+          path: e2e-artifacts
+          if-no-files-found: ignore
+
+  ios-simulator:
+    name: iOS simulator build
+    # Slow native jobs: on PRs, main, release tags and manual runs — not on every feature-branch push.
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/heads/feat/')
+    runs-on: macos-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install
+        run: npm ci
+      - name: Generate the native project
+        run: npx expo prebuild --platform ios --no-install
+      - name: Pods
+        working-directory: apps/mobile/ios
+        run: pod install
+      - name: Build for the simulator (unsigned)
+        run: |
+          WS=$(ls -d ios/*.xcworkspace | head -1)
+          SCHEME=$(basename "$WS" .xcworkspace)
+          set -o pipefail
+          xcodebuild -workspace "$WS" -scheme "$SCHEME" -configuration Release -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build | tail -50
+          APP=$(ls -d build/Build/Products/Release-iphonesimulator/*.app | head -1)
+          echo "APP=$APP" >> "$GITHUB_ENV"
+          ditto -c -k --keepParent "$APP" todo-devs-ios-simulator.zip
+      - name: Launch in a simulator
+        run: |
+          UDID=$(xcrun simctl list devices available -j | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const d=Object.entries(JSON.parse(s).devices).filter(([k])=>k.includes("iOS")).flatMap(([,v])=>v).find(x=>x.name.startsWith("iPhone"));if(!d)throw new Error("no iPhone simulator");console.log(d.udid)})')
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID"
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" dev.tododevs.mobile
+          sleep 15
+          # Still running after 15 s = no startup crash.
+          xcrun simctl spawn "$UDID" launchctl list | grep -q dev.tododevs.mobile
+          xcrun simctl io "$UDID" screenshot ios-launch.png
+      - name: Upload simulator build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator
+          path: apps/mobile/todo-devs-ios-simulator.zip
+          if-no-files-found: error
+      - name: Upload launch screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-launch-screenshot
+          path: apps/mobile/ios-launch.png
+          if-no-files-found: ignore

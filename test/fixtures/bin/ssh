@@ -1,0 +1,16 @@
+#!/bin/sh
+# Fake ssh for tests (CI runners have no sshd): drops ssh options, records argv to
+# $FAKE_SSH_LOG, then runs the remote command string with `sh -c`, as sshd would.
+[ -n "$FAKE_SSH_LOG" ] && echo "$@" >> "$FAKE_SSH_LOG"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --) shift; break ;;
+    -p|-i|-o|-l|-J) shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+shift # the target (user@host)
+PATH="$(cd "$(dirname "$0")" && pwd):$PATH"
+export PATH
+exec sh -c "$*"

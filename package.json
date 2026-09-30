@@ -1,0 +1,39 @@
+{
+  "name": "todo-devs",
+  "version": "0.1.0-alpha.1",
+  "description": "Kanban-style agent task board with dependency scheduling, orchestration, node workflows and SSH remote control",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "todo-devs": "bin/todo-devs.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node bin/todo-devs.js serve",
+    "test": "node --test --test-timeout=120000 \"test/*.test.js\"",
+    "test:e2e": "node --test --test-concurrency=1 --test-timeout=120000 \"test/e2e/*.test.js\"",
+    "check": "node --check bin/todo-devs.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jadewisemann/task-driven-dev.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jadewisemann/task-driven-dev/issues/new/choose"
+  },
+  "homepage": "https://github.com/jadewisemann/task-driven-dev#readme",
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "docs/ALPHA.md"
+  ],
+  "os": [
+    "darwin",
+    "linux"
+  ]
+}

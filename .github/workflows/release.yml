@@ -1,0 +1,80 @@
+name: Release
+
+# Push a tag like v0.1.0-alpha.1: the full CI suite runs (server on macOS/Linux, web e2e,
+# mobile checks, Android APK + emulator test, iOS simulator build), then a GitHub
+# release is published with the npm package, the APK and the simulator build.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  # Fail in seconds (not after the whole CI run) when the tag and the versions disagree.
+  versions:
+    name: Tag matches package.json and app.json
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node .github/scripts/check-versions.mjs "$GITHUB_REF_NAME"
+
+  ci:
+    needs: versions
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Publish GitHub release
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: npm package
+        run: mkdir -p dist && npm pack --pack-destination dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+          path: artifacts/android
+      - uses: actions/download-artifact@v4
+        with:
+          name: ios-simulator
+          path: artifacts/ios
+      - name: Collect assets
+        run: |
+          cp artifacts/android/app-release.apk "dist/todo-devs-$VERSION.apk"
+          cp artifacts/ios/todo-devs-ios-simulator.zip "dist/todo-devs-$VERSION-ios-simulator.zip"
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          ls -l dist
+      - name: Release notes from CHANGELOG.md
+        run: |
+          # The section for this version: from its "## [x]" heading up to the next "## [" heading.
+          awk -v v="$VERSION" '/^## \[/{ if (p) exit; if (index($0, "[" v "]")) { p=1; next } } p' CHANGELOG.md > notes.md
+          [ -s notes.md ] || { echo "CHANGELOG.md has no section for $VERSION"; exit 1; }
+          printf '\n---\nInstall and test guide: [docs/ALPHA.md](https://github.com/%s/blob/%s/docs/ALPHA.md)\n' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" >> notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRE=""
+          case "$VERSION" in *-*) PRE="--prerelease" ;; esac
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+            gh release edit "$GITHUB_REF_NAME" --notes-file notes.md $PRE
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --title "todo.devs $VERSION" --notes-file notes.md --verify-tag $PRE
+          fi

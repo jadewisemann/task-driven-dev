@@ -1,0 +1,229 @@
+import { createServer } from 'node:http';
+import { readFile, stat } from 'node:fs/promises';
+import { extname, join, normalize, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { tokenMatches } from '../core/auth.js';
+
+const WEB_ROOT = resolve(fileURLToPath(new URL('../../web/', import.meta.url)));
+const MAX_BODY = 5 * 1024 * 1024;
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+};
+
+function sendJson(res, status, body) {
+  const data = JSON.stringify(body);
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(data), 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
+  res.end(data);
+}
+
+function readBody(req) {
+  return new Promise((resolveBody, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > MAX_BODY) {
+        reject(Object.assign(new Error('Request body too large'), { status: 413 }));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolveBody(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+/**
+ * Only loopback hosts are accepted. This blocks DNS-rebinding attacks since the
+ * server is meant to be reached locally or through an SSH tunnel.
+ */
+function isAllowedHost(hostHeader, extraHosts) {
+  if (!hostHeader) return false;
+  const host = hostHeader.replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+  return ['localhost', '127.0.0.1', '::1'].includes(host) || extraHosts.includes(host);
+}
+
+async function serveStatic(req, res) {
+  const url = new URL(req.url, 'http://local');
+  let rel;
+  try {
+    rel = decodeURIComponent(url.pathname);
+  } catch {
+    return sendJson(res, 400, { error: 'Malformed URL' });
+  }
+  if (rel === '/' || rel === '') rel = '/index.html';
+  const file = normalize(join(WEB_ROOT, rel));
+  if (file !== WEB_ROOT && !file.startsWith(WEB_ROOT + sep)) return sendJson(res, 403, { error: 'Forbidden' });
+  try {
+    const info = await stat(file);
+    if (!info.isFile()) throw new Error('not a file');
+    const data = await readFile(file);
+    res.writeHead(200, { 'content-type': MIME[extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache', 'referrer-policy': 'no-referrer' });
+    res.end(data);
+  } catch {
+    if (extname(rel)) return sendJson(res, 404, { error: 'Not found' });
+    const data = await readFile(join(WEB_ROOT, 'index.html'));
+    res.writeHead(200, { 'content-type': MIME['.html'], 'referrer-policy': 'no-referrer' });
+    res.end(data);
+  }
+}
+
+function openEventStream(req, res, app) {
+  res.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-store',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  res.write('retry: 2000\n\n');
+  // JSON.stringify never emits raw newlines, and `id:` is only written for numeric seqs,
+  // so relayed (remote) content cannot inject extra SSE frames.
+  const unsubscribe = app.bus.subscribeAll((event) => res.write(`${Number.isFinite(event.seq) ? `id: ${event.seq}\n` : ''}data: ${JSON.stringify(event)}\n\n`));
+  const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
+  const close = () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  };
+  req.on('close', close);
+  res.on('error', close);
+}
+
+/**
+ * Cross-site protection: browsers always attach Origin to cross-origin POSTs
+ * (including `no-cors` ones), so any Origin whose host is not allowed is refused.
+ * Non-browser clients (CLI, scripts) send no Origin.
+ */
+function isAllowedOrigin(origin, extraHosts) {
+  if (!origin) return true;
+  try {
+    return isAllowedHost(new URL(origin).host, extraHosts);
+  } catch {
+    return false;
+  }
+}
+
+const isJsonContentType = (value) => String(value || '').split(';')[0].trim().toLowerCase() === 'application/json';
+
+/**
+ * The token comes in a header. Only the two GET event streams also accept it in
+ * the query string (EventSource cannot set headers), which keeps it out of
+ * URLs for everything else.
+ */
+function presentedToken(req, url) {
+  const header = req.headers['x-todo-devs-token'];
+  if (header) return header;
+  const queryAllowed = req.method === 'GET' && (url.pathname === '/api/events' || url.pathname === '/api/events/poll');
+  return queryAllowed ? url.searchParams.get('token') || undefined : undefined;
+}
+
+/** POST /api/pair {code} -> {token}: redeem a one-time pairing code (no token needed, rate limited). */
+async function redeemPairing(req, res, pairing) {
+  if (!pairing) return sendJson(res, 404, { error: 'Pairing is only available when the server listens on the network' });
+  if (req.method !== 'POST' || !isJsonContentType(req.headers['content-type'])) return sendJson(res, 405, { error: 'POST application/json {code}' });
+  let body;
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch {
+    return sendJson(res, 400, { error: 'Invalid JSON' });
+  }
+  try {
+    const token = pairing.redeem(body?.code);
+    return token ? sendJson(res, 200, { token }) : sendJson(res, 403, { error: 'Invalid or expired pairing code' });
+  } catch (err) {
+    return sendJson(res, err.status || 400, { error: err.message });
+  }
+}
+
+/**
+ * Long-poll for events (mobile app / clients without EventSource).
+ *   GET /api/events/poll?after=<cursor>&timeout=<sec>&peer=<id|name>
+ * Without `peer` only local events are returned; with it, that session's relayed events.
+ */
+async function pollEvents(req, res, app, url) {
+  const after = Math.max(0, Number(url.searchParams.get('after')) || 0);
+  const requested = Number(url.searchParams.get('timeout'));
+  const timeoutMs = Math.min(55, Math.max(0, Number.isFinite(requested) && url.searchParams.has('timeout') ? requested : 25)) * 1000;
+  let peerId = null;
+  const peerParam = url.searchParams.get('peer');
+  if (peerParam && peerParam !== 'local') {
+    try {
+      peerId = app.peers.store.get(peerParam).id;
+    } catch {
+      return sendJson(res, 404, { error: `Unknown peer: ${peerParam}` });
+    }
+  }
+  const filter = (e) => (e.peer || null) === peerId;
+  const controller = new AbortController();
+  req.on('close', () => controller.abort());
+  const result = await app.history.wait(after, filter, { timeoutMs, signal: controller.signal });
+  if (!res.destroyed) sendJson(res, 200, result);
+}
+
+/**
+ * HTTP entry point.
+ *   POST /api/rpc   {method, params, peer?}  -> JSON-RPC style {result} | {error}
+ *   GET  /api/events                          -> Server-Sent Events stream
+ *   GET  /api/events/poll?after=&timeout=&peer= -> long-poll (mobile)
+ *   GET  /api/health
+ *   GET  /*                                   -> web UI
+ *
+ * @param {object} app
+ * @param {{allowedHosts?: string[], token?: string}} [options] token is required for API calls when set
+ */
+export function createHttpServer(app, { allowedHosts = [], token, pairing = null } = {}) {
+  return createServer(async (req, res) => {
+    try {
+      const url = new URL(req.url, 'http://local');
+      const { pathname } = url;
+      const isApi = pathname.startsWith('/api/');
+      const authed = Boolean(token) && tokenMatches(token, presentedToken(req, url));
+
+      /*
+       * Loopback mode (no token): the Host/Origin allow-lists protect everything.
+       * Token mode (LAN, Tailscale, mobile app): API calls must carry the token and
+       * may come through any host name; a valid token is what authorises them.
+       * The static UI is public (it holds no data) so it loads from any address.
+       */
+      if (!token) {
+        if (!isAllowedHost(req.headers.host, allowedHosts)) return sendJson(res, 403, { error: 'Host not allowed' });
+        if (!isAllowedOrigin(req.headers.origin, allowedHosts)) return sendJson(res, 403, { error: 'Origin not allowed' });
+      } else if (isApi && pathname !== '/api/health' && pathname !== '/api/pair' && !authed) {
+        return sendJson(res, 401, { error: 'Missing or invalid token' });
+      }
+
+      if (pathname === '/api/health') return sendJson(res, 200, { ok: true, name: 'todo-devs', version: app.version, auth: Boolean(token) });
+      if (pathname === '/api/pair') return await redeemPairing(req, res, pairing);
+      if (pathname === '/api/events/poll' && req.method === 'GET') return await pollEvents(req, res, app, url);
+      if (pathname === '/api/events' && req.method === 'GET') return openEventStream(req, res, app);
+      if (pathname === '/api/rpc') {
+        if (req.method !== 'POST') return sendJson(res, 405, { error: 'Use POST' });
+        if (!isJsonContentType(req.headers['content-type'])) return sendJson(res, 415, { error: 'Content-Type must be application/json' });
+        let body;
+        try {
+          body = JSON.parse(await readBody(req));
+        } catch (err) {
+          return sendJson(res, err.status || 400, { error: { code: -32700, message: err.status ? err.message : 'Invalid JSON' } });
+        }
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+          return sendJson(res, 400, { error: { code: -32600, message: 'Body must be an object {method, params, peer?}' } });
+        }
+        const response = await app.dispatch({ jsonrpc: '2.0', id: 1, method: body.method, params: body.params, peer: body.peer });
+        return sendJson(res, 200, response.error ? { error: response.error } : { result: response.result });
+      }
+      if (pathname.startsWith('/api/')) return sendJson(res, 404, { error: 'Not found' });
+      if (req.method !== 'GET' && req.method !== 'HEAD') return sendJson(res, 405, { error: 'Method not allowed' });
+      return await serveStatic(req, res);
+    } catch (err) {
+      app.log?.(err);
+      if (!res.headersSent) sendJson(res, 500, { error: 'Internal error' });
+      else res.end();
+    }
+  });
+}

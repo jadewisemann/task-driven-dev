@@ -1,0 +1,9 @@
+#!/bin/sh
+# Fake systemctl --user: records calls; `restart` starts the server if FAKE_SVC_START=1.
+echo "systemctl $*" >> "$FAKE_SVC_LOG"
+if [ "$2" = "restart" ] && [ "$FAKE_SVC_START" = "1" ]; then
+  nohup node "$TODO_DEVS_BIN" serve --home "$FAKE_SVC_HOME" --port "$FAKE_SVC_PORT" > /dev/null 2>&1 &
+  echo $! > "$FAKE_SVC_HOME/fake.pid"
+fi
+[ "$2" = "is-active" ] && echo inactive
+exit 0

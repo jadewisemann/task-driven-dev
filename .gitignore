@@ -1,0 +1,7 @@
+node_modules/
+.todo-devs/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+e2e-artifacts/
