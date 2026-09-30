@@ -135,4 +135,19 @@ export const migrations = [
       CREATE INDEX idx_plans_project ON plans(project_id, created_at);
     `,
   },
+  {
+    id: '006_peers',
+    up: `
+      CREATE TABLE peers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        transport TEXT NOT NULL DEFAULT 'ssh',
+        target TEXT NOT NULL,
+        remote_command TEXT NOT NULL DEFAULT 'todo-devs',
+        options TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `,
+  },
 ];
