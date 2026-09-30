@@ -163,3 +163,13 @@ test('orchestrator: plan a goal, review the draft, run it to the end', async (t)
   assert.equal(await page.locator('.dag-node.status-done').count(), 4);
   await done();
 });
+
+test('settings: version, health checks and alpha feedback link', async (t) => {
+  const { page, done } = await openBoard(t);
+  await page.click('.alpha-tag');
+  await page.waitForSelector('.doctor-table tr');
+  assert.match(await page.locator('.alpha-badge').innerText(), /alpha · v\d/);
+  assert.ok((await page.locator('.doctor-table tr').count()) >= 6);
+  assert.match(await page.locator('a:has-text("Report an issue")').getAttribute('href'), /\/issues$/);
+  await done();
+});

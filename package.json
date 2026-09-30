@@ -15,5 +15,23 @@
     "test": "node --test --test-timeout=120000 \"test/*.test.js\"",
     "test:e2e": "node --test --test-concurrency=1 --test-timeout=120000 \"test/e2e/*.test.js\"",
     "check": "node --check bin/todo-devs.js"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jadewisemann/task-driven-dev.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jadewisemann/task-driven-dev/issues"
+  },
+  "homepage": "https://github.com/jadewisemann/task-driven-dev#readme",
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "os": [
+    "darwin",
+    "linux"
+  ]
 }

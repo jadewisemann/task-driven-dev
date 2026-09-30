@@ -4,6 +4,12 @@ import { pairingInfo } from './pairing.js';
 import { rotateToken } from '../server/core/auth.js';
 import { readDaemonInfo, resolveHome } from '../server/core/paths.js';
 import { serve } from './serve.js';
+import { backup, restore } from './backup.js';
+import { installService, serviceSpec, serviceStatus, uninstallService } from './service.js';
+import { runDoctor } from '../server/core/doctor.js';
+import { readFileSync } from 'node:fs';
+
+const VERSION = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
 
 const HELP = `todo.devs — agent kanban with dependency scheduling, orchestration and remote sessions
 
@@ -31,6 +37,15 @@ Remote sessions (SSH)
   todo-devs peer list | ping <name> | rm <name>
   Any command + --peer <name> runs against that remote instance, e.g.
     todo-devs status --peer build-box
+
+Operations
+  todo-devs doctor                          Check Node, git, agent CLIs, data and server
+  todo-devs service install [--port 7420] [--host 127.0.0.1] [--print]
+                                            Start on login (launchd on macOS, systemd --user on Linux)
+  todo-devs service status | uninstall
+  todo-devs backup [--out FILE]             Snapshot the database (safe while running)
+  todo-devs restore FILE                    Replace the database (server must be stopped)
+  todo-devs --version
 
 Low level
   todo-devs call <method> [json-params]     Call any RPC method
@@ -63,7 +78,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** @returns {Promise<number|void>} exit code */
 export async function runCli(positionals, flags) {
   const [command] = positionals;
-  if (['serve', 'rpc', 'help', 'pair', 'token', undefined].includes(command)) return runCommand(positionals, flags, null);
+  if (flags.version || command === 'version') {
+    console.log(VERSION);
+    return 0;
+  }
+  if (['serve', 'rpc', 'help', 'pair', 'token', 'service', 'backup', 'restore', 'doctor', undefined].includes(command)) return runCommand(positionals, flags, null);
   if (flags.peer === true) throw new Error('--peer needs a peer name');
   const session = await openSession({ home: flags.home });
   try {
@@ -119,6 +138,61 @@ async function runCommand(positionals, flags, session) {
       } finally {
         await session.close();
       }
+    }
+    case 'doctor': {
+      const home = resolveHome(flags.home);
+      const daemon = readDaemonInfo(home);
+      let report;
+      if (daemon) {
+        const session = await openSession({ home: flags.home });
+        try {
+          report = await session.call('system.doctor', {});
+        } finally {
+          await session.close();
+        }
+      } else report = runDoctor({ home, daemon: null });
+      if (flags.json) return print(report, flags);
+      const icon = { ok: '✓', warn: '!', fail: '✗' };
+      console.log(`todo.devs ${VERSION} (${process.platform}, node ${process.versions.node})`);
+      for (const c of report.checks) console.log(`${icon[c.status]} ${c.label}: ${c.detail}${c.fix ? `\n    → ${c.fix}` : ''}`);
+      return report.summary === 'fail' ? 1 : 0;
+    }
+    case 'service': {
+      const [sub] = rest;
+      const opts = { home: resolveHome(flags.home), port: Number(flags.port) || 7420, host: typeof flags.host === 'string' ? flags.host : '127.0.0.1' };
+      if (sub === 'install') {
+        if (flags.print) {
+          const spec = serviceSpec(opts);
+          console.log(`# ${spec.file}\n${spec.content}`);
+          return 0;
+        }
+        const res = installService(opts);
+        console.log(`installed ${res.file}\n${res.steps.join('\n')}\nlogs: ${res.log}\nopen http://127.0.0.1:${opts.port}`);
+        return 0;
+      }
+      if (sub === 'uninstall') {
+        const res = uninstallService(opts);
+        console.log(res.removed ? `removed ${res.file}` : 'no service was installed');
+        return 0;
+      }
+      if (sub === 'status' || !sub) {
+        const s = serviceStatus(opts);
+        if (flags.json) return print(s, flags);
+        console.log(`${s.kind}: ${s.installed ? (s.active ? 'running' : 'installed, not running') : 'not installed'}\n${s.file}\nlogs: ${s.log}`);
+        return 0;
+      }
+      throw new Error('usage: todo-devs service install|uninstall|status');
+    }
+    case 'backup': {
+      const res = backup(resolveHome(flags.home), typeof flags.out === 'string' ? flags.out : undefined);
+      console.log(`backup written: ${res.file} (${Math.round(res.bytes / 1024)} KB)`);
+      return 0;
+    }
+    case 'restore': {
+      if (!rest[0]) throw new Error('usage: todo-devs restore FILE');
+      const res = restore(resolveHome(flags.home), rest[0]);
+      console.log(`restored ${res.restored}${res.previous ? `\nprevious database kept as ${res.previous}` : ''}`);
+      return 0;
     }
     case 'token': {
       if (rest[0] !== 'rotate') throw new Error('usage: todo-devs token rotate');
