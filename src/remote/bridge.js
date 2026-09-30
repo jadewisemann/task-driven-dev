@@ -6,7 +6,7 @@ import { readDaemonInfo, resolveHome } from '../server/core/paths.js';
 import { createLineReader, writeLine } from './jsonl.js';
 
 /** Methods a remote caller may not use through the bridge (no chained hops / peer admin from afar). */
-const BLOCKED_PREFIXES = ['peers.'];
+const BLOCKED_PREFIXES = ['peers.', 'system.pairing'];
 
 /**
  * `todo-devs rpc` — the remote end of an SSH session.

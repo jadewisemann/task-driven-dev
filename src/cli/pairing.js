@@ -12,16 +12,22 @@ function reachableAddresses() {
   }
   // Link-local (169.254.x) addresses are rarely reachable from a phone: only used as a last resort.
   const usable = out.filter((a) => !a.address.startsWith('169.254.'));
-  // Tailscale first: it works from anywhere, LAN only on the same network.
+  // Tailscale first: it is encrypted and works from anywhere; LAN only on the same network.
   return (usable.length ? usable : out).sort((x, y) => Number(y.tailscale) - Number(x.tailscale));
 }
 
+export const PAIRING_WARNING =
+  'Links contain a one-time code (valid 10 minutes, single use). Plain LAN addresses are unencrypted HTTP: use them only on networks you trust — Tailscale addresses are encrypted.';
+
 /**
- * Pairing info for the mobile app and other devices.
- * deepLink opens the app directly: todo-devs://connect?url=…&token=…&name=…
+ * Pairing info for the mobile app and other browsers. Links carry a one-time
+ * code (never the long-lived token); the device exchanges it via POST /api/pair.
+ *   app: todo-devs://pair?url=…&code=…&name=…
+ *   web: http://host:port/#pair=CODE
  * @param {{host: string, port: number, token: string|null}} daemon
+ * @param {{code?: string, expiresAt?: string, publicHost?: string}} [opts]
  */
-export function pairingInfo(daemon, { publicHost } = {}) {
+export function pairingInfo(daemon, { code, expiresAt, publicHost } = {}) {
   if (!daemon.token || LOOPBACK.includes(daemon.host)) {
     return {
       enabled: false,
@@ -34,8 +40,8 @@ export function pairingInfo(daemon, { publicHost } = {}) {
   const name = hostname().split('.')[0];
   const links = targets.map((t) => {
     const url = `http://${t.address.includes(':') && !t.address.startsWith('[') ? `[${t.address}]` : t.address}:${daemon.port}`;
-    const q = new URLSearchParams({ url, token: daemon.token, name });
-    return { label: `${t.iface}${t.tailscale ? ' (Tailscale)' : ''} ${t.address}`, url, deepLink: `todo-devs://connect?${q}`, web: `${url}/?token=${encodeURIComponent(daemon.token)}` };
+    const q = new URLSearchParams({ url, code, name });
+    return { label: `${t.iface}${t.tailscale ? ' (Tailscale)' : ''} ${t.address}`, url, encrypted: Boolean(t.tailscale), deepLink: `todo-devs://pair?${q}`, web: `${url}/#pair=${code}` };
   });
-  return { enabled: links.length > 0, reason: links.length ? null : 'No network interface found', name, links };
+  return { enabled: links.length > 0, reason: links.length ? null : 'No network interface found', name, code, expiresAt, warning: PAIRING_WARNING, links };
 }

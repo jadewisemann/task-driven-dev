@@ -21,7 +21,7 @@ Board (current project = first one, or --project ID)
 
 Mobile app / other devices
   todo-devs serve --host 0.0.0.0            Listen on the network (token required, kept in auth.json)
-  todo-devs pair [--host 100.x.y.z]         Print pairing links (open the app link on the phone)
+  todo-devs pair [--host 100.x.y.z]         One-time pairing code + links (valid 10 min)
   todo-devs token rotate                    New token; paired devices must pair again (restart server)
 
 Remote sessions (SSH)
@@ -99,17 +99,26 @@ async function runCommand(positionals, flags, session) {
       return new Promise(() => {}); // keep running until a signal arrives
     }
     case 'pair': {
-      const daemon = readDaemonInfo(resolveHome(flags.home));
-      if (!daemon) throw new Error('no server running — start one with `todo-devs serve --host 0.0.0.0`');
-      const info = pairingInfo(daemon, { publicHost: typeof flags.host === 'string' ? flags.host : undefined });
-      if (flags.json) return print(info, flags);
-      if (!info.enabled) {
-        console.log(info.reason);
-        return 1;
+      const session = await openSession({ home: flags.home });
+      try {
+        if (session.mode !== 'daemon') throw new Error('no server running — start one with `todo-devs serve --host 0.0.0.0`');
+        let info = await session.call('system.pairing', {});
+        if (typeof flags.host === 'string' && info.enabled) {
+          // Re-render the links for an explicit address (e.g. a Tailscale MagicDNS name).
+          info = pairingInfo(readDaemonInfo(resolveHome(flags.home)), { code: info.code, expiresAt: info.expiresAt, publicHost: flags.host });
+        }
+        if (flags.json) return print(info, flags);
+        if (!info.enabled) {
+          console.log(info.reason);
+          return 1;
+        }
+        console.log(`Pairing code ${info.code} (expires ${new Date(info.expiresAt).toLocaleTimeString()}). ${info.warning}`);
+        console.log('Open the app link on your phone (or type the code in the app), or the web link in a browser.');
+        for (const l of info.links) console.log(`\n${l.label}${l.encrypted ? '' : '  [unencrypted]'}\n  app: ${l.deepLink}\n  web: ${l.web}`);
+        return 0;
+      } finally {
+        await session.close();
       }
-      console.log('Open the app link on your phone (e.g. send it to yourself) or paste it in the app. Keep it private.');
-      for (const l of info.links) console.log(`\n${l.label}\n  app: ${l.deepLink}\n  web: ${l.web}`);
-      return 0;
     }
     case 'token': {
       if (rest[0] !== 'rotate') throw new Error('usage: todo-devs token rotate');

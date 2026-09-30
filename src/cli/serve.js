@@ -1,5 +1,5 @@
 import { createApp } from '../server/app.js';
-import { loadOrCreateToken } from '../server/core/auth.js';
+import { PairingCodes, loadOrCreateToken } from '../server/core/auth.js';
 import { createHttpServer } from '../server/http/server.js';
 import { clearDaemonInfo, writeDaemonInfo } from '../server/core/paths.js';
 import { pairingInfo } from './pairing.js';
@@ -13,11 +13,10 @@ const LOOPBACK = ['127.0.0.1', 'localhost', '::1'];
  */
 export async function serve({ home, port = 7420, host = '127.0.0.1', allowedHosts = [], token }) {
   const app = createApp({ home, recover: true });
-  if (!LOOPBACK.includes(host) && !token) token = loadOrCreateToken(app.home);
-  const server = createHttpServer(app, { allowedHosts, token });
-  // Long-polls hold requests open ~25-55 s; keep Node's defaults from cutting them.
-  server.requestTimeout = 0;
-  server.headersTimeout = 60_000;
+  const networked = !LOOPBACK.includes(host);
+  if (networked && !token) token = loadOrCreateToken(app.home);
+  const pairing = token ? new PairingCodes(token) : null;
+  const server = createHttpServer(app, { allowedHosts, token, pairing });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(Number(port), host, resolve);
@@ -26,14 +25,18 @@ export async function serve({ home, port = 7420, host = '127.0.0.1', allowedHost
   const daemon = { port: address.port, host, token: token || null };
   writeDaemonInfo(app.home, daemon);
 
-  app.rpc.register('system.pairing', () => pairingInfo(daemon), 'Links for pairing the mobile app / other devices (token mode only)');
+  // Each call mints a fresh one-time code; the long-lived token itself is never handed out.
+  app.rpc.register(
+    'system.pairing',
+    () => (pairing ? pairingInfo(daemon, pairing.create()) : pairingInfo(daemon)),
+    'One-time pairing links for the mobile app / other browsers (network mode only)',
+  );
 
-  console.log(`todo.devs ${app.version} listening on http://${LOOPBACK.includes(host) ? host : '<this-host>'}:${address.port}`);
+  console.log(`todo.devs ${app.version} listening on http://${networked ? '<this-host>' : host}:${address.port}`);
   console.log(`data: ${app.home}`);
-  const pairing = pairingInfo(daemon);
-  if (pairing.enabled) {
-    console.log('pair a phone or another browser (keep these private — they grant full access):');
-    for (const l of pairing.links) console.log(`  ${l.label}\n    app: ${l.deepLink}\n    web: ${l.web}`);
+  if (networked) {
+    console.log('network mode: API calls need the access token. Pair a phone or browser with `todo-devs pair`.');
+    if (allowedHosts.length) console.log('note: --allow-host is ignored in network mode (the token authorises requests).');
   }
 
   let closing = false;

@@ -105,38 +105,36 @@ export const remoteView = {
       );
     }
 
-    /** Links that pair the todo.devs mobile app (or another browser) with this server. */
-    function pairingPanel(info) {
-      if (!info) return null;
-      const copy = (text) => () => navigator.clipboard?.writeText(text).then(() => toast('Copied — keep it private', 'success'), () => toast(text));
-      return h(
-        'div',
-        { class: 'panel help-panel' },
-        h('h4', {}, 'Mobile app'),
-        info.enabled
-          ? [
-              h('p', { class: 'small' }, 'Open one of these links on your phone (or paste it into the app’s “Add server” screen). Anyone with the link has full access — share it only with yourself.'),
-              info.links.map((l) =>
-                h(
-                  'div',
-                  { class: 'pair-row' },
-                  h('span', { class: 'muted small' }, l.label),
-                  h('button', { class: 'btn small', onClick: copy(l.deepLink) }, 'Copy app link'),
-                  h('button', { class: 'btn small ghost', onClick: copy(l.web) }, 'Copy browser link'),
-                ),
-              ),
-            ]
-          : h('p', { class: 'muted small' }, info.reason),
-      );
+    /** Mints a one-time pairing code on demand (not on every render) and shows the links. */
+    function pairingPanel() {
+      const body = h('div', {}, h('p', { class: 'small muted' }, 'Pair the todo.devs mobile app (or another browser) with this server.'));
+      const copy = (text) => () => navigator.clipboard?.writeText(text).then(() => toast('Copied', 'success'), () => toast(text));
+      async function create() {
+        const info = await call('system.pairing');
+        if (!info.enabled) return body.replaceChildren(h('p', { class: 'muted small' }, info.reason));
+        body.replaceChildren(
+          h('p', { class: 'small' }, 'Pairing code ', h('code', {}, info.code), ` — open a link on your phone or type the code in the app. ${info.warning}`),
+          ...info.links.map((l) =>
+            h(
+              'div',
+              { class: 'pair-row' },
+              h('span', { class: 'muted small' }, l.label, l.encrypted ? '' : ' · unencrypted'),
+              h('button', { class: 'btn small', onClick: copy(l.deepLink) }, 'Copy app link'),
+              h('button', { class: 'btn small ghost', onClick: copy(l.web) }, 'Copy browser link'),
+            ),
+          ),
+        );
+      }
+      return h('div', { class: 'panel help-panel' }, h('h4', {}, 'Mobile app'), body, h('button', { class: 'btn small primary', onClick: act(create) }, 'Create pairing code'));
     }
 
     async function load() {
-      const [peers, pairing] = await Promise.all([call('peers.list'), call('system.pairing').catch(() => null)]);
+      const peers = await call('peers.list');
       mountInto(
         root,
         h('div', { class: 'toolbar' }, h('div', { class: 'toolbar-title' }, h('h2', {}, 'Remote sessions'), h('span', { class: 'muted' }, 'Control todo.devs on other machines over SSH — same board, agents and flows.')), h('button', { class: 'btn primary', onClick: act(addPeer) }, '+ Add remote')),
         peers.length ? h('div', { class: 'grid-cards' }, peers.map(peerCard)) : h('div', { class: 'empty' }, 'No remote sessions yet.'),
-        pairingPanel(pairing),
+        pairingPanel(),
         h(
           'div',
           { class: 'panel help-panel' },
