@@ -38,7 +38,7 @@ function agentSelect(value, agents, { allowSelf, allowNone }, onValue) {
 }
 
 /** Editor for router rules: [{port, match, conditions: [{path, op, value}]}]. */
-function rulesEditor(rules, onValue) {
+function rulesEditor(rules, onValue, onRename) {
   const box = h('div', { class: 'rules' });
   const commit = () => onValue(structuredClone(rules));
   function render() {
@@ -51,7 +51,18 @@ function rulesEditor(rules, onValue) {
             'div',
             { class: 'rule-head' },
             h('span', { class: 'muted small' }, 'route'),
-            h('input', { class: 'rule-port', value: rule.port || '', placeholder: 'port name', onChange: (e) => ((rule.port = e.target.value.trim().replace(/\s+/g, '_')), commit(), render()) }),
+            h('input', {
+              class: 'rule-port',
+              value: rule.port || '',
+              placeholder: 'port name',
+              onChange: (e) => {
+                const before = rule.port;
+                rule.port = e.target.value.trim().replace(/\s+/g, '_');
+                if (before && before !== rule.port && !rules.some((r) => r !== rule && r.port === before)) onRename?.(before, rule.port);
+                commit();
+                render();
+              },
+            }),
             h('select', { onChange: (e) => ((rule.match = e.target.value), commit()) }, h('option', { value: 'all', selected: rule.match !== 'any' }, 'all of'), h('option', { value: 'any', selected: rule.match === 'any' }, 'any of')),
             h('button', { class: 'icon-btn', title: 'Remove route', onClick: () => (rules.splice(ri, 1), commit(), render()) }, '✕'),
           ),
@@ -81,7 +92,7 @@ function rulesEditor(rules, onValue) {
  * Right-hand panel for the selected node: name, config fields from the node
  * type's schema, loop limit and the node's last output.
  */
-export function renderInspector(node, { types, agents, lastOutput, onChange, onRemove }) {
+export function renderInspector(node, { types, agents, lastOutput, onChange, onRemove, onRenamePort }) {
   const info = types.find((t) => t.type === node.type);
   node.config ||= {};
   const set = (key, value) => {
@@ -110,8 +121,8 @@ export function renderInspector(node, { types, agents, lastOutput, onChange, onR
         input = agentSelect(value, agents, { allowSelf: f.allowSelf, allowNone: !f.allowSelf }, (v) => set(f.key, v));
         break;
       case 'rules':
-        node.config.rules = structuredClone(value || []);
-        input = rulesEditor(node.config.rules, (v) => set('rules', v));
+        // Edit a copy; the graph only changes when the user commits an edit.
+        input = rulesEditor(structuredClone(value || []), (v) => set('rules', v), onRenamePort);
         break;
       default:
         input = h('input', { class: f.key === 'command' ? 'code' : '', value: value ?? '', onInput: (e) => set(f.key, e.target.value) });

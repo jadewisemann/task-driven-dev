@@ -45,8 +45,9 @@ export function createApp(options = {}) {
   const runs = createRunStore({ db, bus });
   const runner = createRunner({ bus, services, runs, home, log });
   const scheduler = createScheduler({ bus, services, runner, log });
-  const wfRunner = createWorkflowRunner({ bus, services, runner, runs, log });
+  const wfRunner = createWorkflowRunner({ bus, services, runner, runs, home, log });
   runner.agentGraphExecutor = wfRunner.executeAgentGraph;
+  runner.onCancelRun = wfRunner.cancel; // runs.cancel also reaches standalone workflow runs
   if (options.recover) runner.recoverInterrupted();
 
   const app = {
@@ -65,7 +66,7 @@ export function createApp(options = {}) {
     disposers: [
       async () => {
         scheduler.stopAll();
-        await runner.cancelAll();
+        await Promise.all([runner.cancelAll(), wfRunner.cancelAll()]);
         runs.close(); // late output from runs that outlived the wait is dropped, never written to a closed DB
       },
     ],

@@ -1,5 +1,29 @@
 import { runProcess } from '../runtime/process.js';
-import { evaluateRule, renderDeep, renderTemplate } from './expr.js';
+import { evaluateRule, getPath, renderDeep, renderTemplate } from './expr.js';
+
+/** Output ports of a node, using the type defaults for anything not configured. */
+export function portsOf(node) {
+  const type = NODE_TYPES[node.type];
+  return type ? type.outputs({ ...type.defaults, ...(node.config || {}) }) : [];
+}
+
+/**
+ * Turns a shell template into a safe invocation: every {{path}} (optionally
+ * wrapped in quotes) becomes a quoted positional parameter "$N" whose value is
+ * passed as a separate argv entry, so data can never be parsed as shell code.
+ */
+export function shellInvocation(template, scope) {
+  const values = [];
+  const script = String(template).replace(/(["']?)\{\{\s*([^}]+?)\s*\}\}\1/g, (_, _q, path) => {
+    const v = getPath(scope, path);
+    values.push(v === undefined || v === null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+    return `"\${${values.length}}"`;
+  });
+  return { args: ['-c', script, 'todo-devs-shell', ...values], script };
+}
+
+export const MAX_TASK_DEPTH = 3;
+export const MAX_TASKS_PER_RUN = 25;
 
 /**
  * Node type registry. Each type declares:
@@ -82,9 +106,11 @@ export const NODE_TYPES = {
       const prompt = String(renderTemplate(config.prompt || '{{input}}', scope) ?? '');
       const system = config.system ? String(renderTemplate(config.system, scope) ?? '') : undefined;
       const res = await env.runAgent(config.agentId || 'self', { prompt, system });
-      const out = { text: res.output, json: res.result, status: res.result?.status || (res.code === 0 ? 'done' : 'failed'), code: res.code };
       if (res.cancelled) throw Object.assign(new Error('cancelled'), { cancelled: true });
-      return res.code === 0 && res.result?.status !== 'failed' ? { out } : { error: { ...out, error: res.stderr?.slice(-2000) } };
+      const out = { text: res.output, json: res.result, status: res.result?.status || (res.code === 0 ? 'done' : 'failed'), code: res.code, truncated: res.truncated, timedOut: res.timedOut };
+      if (res.code === 0 && res.result?.status !== 'failed') return { out };
+      const error = res.timedOut ? 'agent timed out' : (res.stderr || '').slice(-2000) || res.result?.summary || `agent exited with code ${res.code}`;
+      return { error: { ...out, error } };
     },
   },
 
@@ -95,7 +121,7 @@ export const NODE_TYPES = {
     description:
       'Routes the incoming JSON. Rules mode: first matching rule wins (or all matches with "fan out"); each rule is a list of {path, op, value} conditions on e.g. input.json.status. Agent mode: an agent reads the input and picks a route.',
     input: true,
-    outputs: (config) => [...new Set([...(config.rules || []).map((r) => r.port).filter(Boolean), 'else'])],
+    outputs: (config) => [...new Set([...(config.rules || []).map((r) => r.port).filter(Boolean), 'else', ...(config.mode === 'agent' ? ['error'] : [])])],
     fields: [
       {
         key: 'mode',
@@ -119,11 +145,15 @@ export const NODE_TYPES = {
       question: 'Which route fits this input best?',
     },
     async execute({ config, input, scope, env, log }) {
-      const ports = NODE_TYPES.router.outputs(config).filter((p) => p !== 'else');
+      const ports = NODE_TYPES.router.outputs(config).filter((p) => p !== 'else' && p !== 'error');
       if (config.mode === 'agent') {
         const prompt = `${renderTemplate(config.question || 'Pick a route.', scope)}\n\nInput:\n\`\`\`json\n${JSON.stringify(input, null, 2)}\n\`\`\`\n\nRoutes: ${[...ports, 'else'].join(', ')}\nAnswer with a fenced \`\`\`json block: {"route": "<one of the routes>", "reason": "..."}`;
         const res = await env.runAgent(config.agentId || 'self', { prompt });
+        if (res.cancelled) throw Object.assign(new Error('cancelled'), { cancelled: true });
+        // A crashed or evasive decider must not silently fall through to "else".
+        if (res.code !== 0) throw new Error(`deciding agent failed (code ${res.code})`);
         const route = res.result?.route;
+        if (typeof route !== 'string') throw new Error('deciding agent did not return {"route": ...}');
         log(`agent chose route: ${route ?? '(none)'}${res.result?.reason ? ` — ${res.result.reason}` : ''}`);
         return { [ports.includes(route) ? route : 'else']: input };
       }
@@ -149,19 +179,19 @@ export const NODE_TYPES = {
     label: 'Shell',
     icon: '$',
     category: 'Tools',
-    description: 'Runs a command with sh -c in the workspace (templates allowed). Output { stdout, stderr, code }; non-zero exit goes to "error".',
+    description: 'Runs a command with sh -c in the workspace. {{paths}} are passed as quoted arguments (never parsed as shell code). Output { stdout, stderr, code }; non-zero exit goes to "error".',
     input: true,
     outputs: () => ['out', 'error'],
     fields: [
       { key: 'command', label: 'Command', type: 'text' },
       { key: 'timeoutSec', label: 'Timeout (sec)', type: 'number' },
     ],
-    defaults: { command: 'echo "{{input.text}}"', timeoutSec: 120 },
+    defaults: { command: 'printf "%s\\n" {{input.text}}', timeoutSec: 120 },
     async execute({ config, scope, env, signal, log }) {
-      const command = String(renderTemplate(config.command || '', scope) ?? '');
-      if (!command.trim()) throw new Error('shell node needs a command');
-      log(`$ ${command}`);
-      const res = await runProcess({ command: 'sh', args: ['-c', command], cwd: env.cwd, timeoutMs: (config.timeoutSec || 120) * 1000, signal, onData: (_, t) => log(t, 'stdout') });
+      if (!String(config.command || '').trim()) throw new Error('shell node needs a command');
+      const { args, script } = shellInvocation(config.command, scope);
+      log(`$ ${script}`);
+      const res = await runProcess({ command: 'sh', args, cwd: env.cwd, timeoutMs: (config.timeoutSec || 120) * 1000, signal, onData: (stream, t) => log(t, stream) });
       const out = { stdout: res.stdout, stderr: res.stderr, code: res.code };
       return res.code === 0 ? { out } : { error: out };
     },
@@ -189,11 +219,13 @@ export const NODE_TYPES = {
     defaults: { title: '{{input.title}}', description: '{{input.description}}', assigneeId: '', status: 'todo', priority: 1 },
     async execute({ config, scope, env }) {
       const title = String(renderTemplate(config.title, scope) ?? '').trim() || 'Untitled task';
+      const status = config.status || 'todo';
+      if (!['backlog', 'todo'].includes(status)) throw new Error(`Create task: column must be backlog or todo, got "${status}"`);
       const task = await env.createTask({
         title,
         description: String(renderTemplate(config.description || '', scope) ?? ''),
         assigneeId: config.assigneeId || null,
-        status: config.status || 'todo',
+        status,
         priority: Math.min(3, Math.max(0, Number(config.priority ?? 1) | 0)),
       });
       return { out: { id: task.id, title: task.title, status: task.status } };
@@ -226,6 +258,6 @@ export function nodeTypeList() {
     input: t.input,
     fields: t.fields,
     defaults: t.defaults,
-    staticOutputs: type === 'router' ? null : t.outputs({}),
+    staticOutputs: type === 'router' ? null : t.outputs(t.defaults),
   }));
 }

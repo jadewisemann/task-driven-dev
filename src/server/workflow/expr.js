@@ -45,8 +45,11 @@ export function renderDeep(value, scope) {
 
 const num = (v) => (typeof v === 'number' ? v : Number(v));
 
+const scalar = (v) => v === null || typeof v !== 'object';
+
 export const OPERATORS = {
-  eq: (a, b) => a === b || (a !== undefined && a !== null && b !== undefined && String(a) === String(b)),
+  // Scalars compare loosely ("3" eq 3); objects/arrays compare structurally.
+  eq: (a, b) => a === b || (a !== undefined && b !== undefined && (scalar(a) && scalar(b) ? a !== null && String(a) === String(b) : JSON.stringify(a) === JSON.stringify(b))),
   neq: (a, b) => !OPERATORS.eq(a, b),
   gt: (a, b) => num(a) > num(b),
   gte: (a, b) => num(a) >= num(b),
@@ -59,9 +62,12 @@ export const OPERATORS = {
   notExists: (a) => a === undefined || a === null || a === '',
   truthy: (a) => Boolean(a) && a !== 'false' && a !== '0',
   falsy: (a) => !OPERATORS.truthy(a),
+  // Bounded to limit catastrophic backtracking on untrusted (agent) text.
   regex: (a, b) => {
+    const pattern = String(b ?? '');
+    if (pattern.length > 200) return false;
     try {
-      return new RegExp(String(b)).test(String(a ?? ''));
+      return new RegExp(pattern).test(String(a ?? '').slice(0, 10_000));
     } catch {
       return false;
     }

@@ -98,7 +98,7 @@ export const workflowsView = {
       const wf = state.current;
       mountInto(
         toolbar,
-        h('input', { class: 'wf-title', value: wf.name, onInput: (e) => ((wf.name = e.target.value), setDirty(true)) }),
+        h('input', { class: 'wf-title', value: wf.name, onInput: (e) => ((state.current.name = e.target.value), setDirty(true)) }),
         h('span', { class: `badge scope-${wf.scope}` }, wf.scope === 'agent' ? 'agent graph' : 'project workflow'),
         h('span', { class: 'dirty warn-text small' }),
         h('div', { class: 'spacer' }),
@@ -147,6 +147,7 @@ export const workflowsView = {
             if (['name', 'rules', 'mode', 'agentId', 'command'].includes(key)) canvas.refreshNode(n.id);
           },
           onRemove: () => canvas.removeSelection(),
+          onRenamePort: (from, to) => canvas.renamePort(node.id, from, to),
         }),
       );
     }
@@ -154,7 +155,10 @@ export const workflowsView = {
     async function save() {
       const wf = state.current;
       const saved = await ctx.rpc('workflows.update', { id: wf.id, name: wf.name, graph: canvas.getGraph() });
-      state.current = { ...saved, graph: canvas.getGraph() };
+      // Keep the canvas' live graph object; refresh the cached list entry so switching back shows the saved version.
+      Object.assign(state.current, { name: saved.name, updatedAt: saved.updatedAt });
+      state.list = state.list.map((w) => (w.id === saved.id ? structuredClone(saved) : w));
+      renderSidebar();
       setDirty(false);
       const { problems } = await ctx.rpc('workflows.validate', { id: wf.id });
       toast(problems.length ? `Saved with ${problems.length} problem(s): ${problems[0]}` : 'Workflow saved', problems.length ? 'error' : 'success');
@@ -180,10 +184,21 @@ export const workflowsView = {
       state.outputs = {};
       const { runId } = await ctx.rpc('workflows.run', { id: state.current.id, input, projectId: ctx.project?.id });
       state.runId = runId;
-      mountInto(runPanel, h('div', { class: 'wf-run-head' }, h('strong', {}, 'Run log'), h('span', { class: 'muted small run-status' }, 'running…')), logViewer(ctx, runId, { height: 180 }));
+      mountInto(
+        runPanel,
+        h(
+          'div',
+          { class: 'wf-run-head' },
+          h('strong', {}, 'Run log'),
+          h('span', { class: 'muted small run-status' }, 'running…'),
+          h('button', { class: 'btn small danger ghost cancel-run', onClick: () => ctx.rpc('runs.cancel', { id: runId }).catch(ctx.showError) }, 'Cancel'),
+        ),
+        logViewer(ctx, runId, { height: 180 }),
+      );
     }
 
     async function createWorkflow() {
+      if (state.dirty && !(await confirmDialog('Discard unsaved changes?'))) return;
       const values = await promptForm('New workflow', [
         { name: 'name', label: 'Name', placeholder: 'e.g. Bug triage' },
         {
@@ -227,9 +242,18 @@ export const workflowsView = {
     const off = ctx.onEvent((e) => {
       const p = e.payload || {};
       if (e.type === 'workflow.node' && canvas && state.current && p.workflowId === state.current.id) {
-        canvas.setStatus(p.nodeId, { status: p.status, visit: p.visit });
+        if (p.runId !== state.runId) {
+          // Follow the newest run of this graph (e.g. an agent running a task); ignore stragglers from others.
+          const isStart = canvas.getGraph().nodes.find((n) => n.id === p.nodeId)?.type === 'trigger';
+          if (!(isStart && p.status === 'running')) return;
+          state.runId = p.runId;
+          state.outputs = {};
+          canvas.clearStatus();
+        }
+        canvas.setStatus(p.nodeId, { status: p.status, visit: p.visit, ports: p.ports });
         if (p.output !== undefined) state.outputs[p.nodeId] = p.output;
       } else if (e.type === 'workflow.run.finished' && p.runId === state.runId) {
+        runPanel.querySelector('.cancel-run')?.remove();
         const el = runPanel.querySelector('.run-status');
         if (el) el.textContent = p.status === 'succeeded' ? `✓ succeeded${p.result ? ` — ${JSON.stringify(p.result).slice(0, 160)}` : ''}` : `✗ ${p.status}: ${p.error || ''}`;
       }

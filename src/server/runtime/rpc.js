@@ -30,7 +30,13 @@ export function registerRuntimeRpc(rpc, { runner, scheduler, runs, services, log
       handler: (p) => runs.logs(check.string(p, 'runId'), { afterId: check.number(p, 'afterId', { optional: true, integer: true }) ?? 0 }),
       description: 'Log lines of a run {runId, afterId?}',
     },
-    cancel: { handler: (p) => ({ cancelled: runner.cancelRun(check.string(p, 'id'), ABORT_CANCEL) }), description: 'Cancel a running run' },
+    cancel: {
+      handler: (p) => {
+        const id = check.string(p, 'id');
+        return { cancelled: runner.cancelRun(id, ABORT_CANCEL) || Boolean(runner.onCancelRun?.(id)) };
+      },
+      description: 'Cancel a running run (task or workflow)',
+    },
   });
 
   rpc.register(

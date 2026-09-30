@@ -3,7 +3,9 @@ import { parseJson, toJson } from '../core/db.js';
 import { check, invalidParams, notFound } from '../core/errors.js';
 import { newId, now } from '../core/ids.js';
 import { runGraph, validateGraph } from '../workflow/engine.js';
-import { nodeTypeList } from '../workflow/nodes.js';
+import { MAX_TASKS_PER_RUN, MAX_TASK_DEPTH, nodeTypeList } from '../workflow/nodes.js';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { workflowTemplates } from '../workflow/templates.js';
 
 export const WORKFLOW_SCOPES = ['project', 'agent'];
@@ -91,13 +93,22 @@ export function createWorkflowService({ db, bus }) {
  * Runs workflow graphs: standalone (project workflows, manual or via RPC) and
  * as an agent's own node graph when that agent executes a task.
  */
-export function createWorkflowRunner({ bus, services, runner, runs, log = console.error }) {
+export function createWorkflowRunner({ bus, services, runner, runs, home, log = console.error }) {
   const controllers = new Map(); // runId -> AbortController
+  const inflight = new Set();
 
-  function makeEnv({ owner, run, cwd, projectId, signal, attempt, vars }) {
-    return {
+  /**
+   * Services a graph can use. Tracks flags (truncated / timed out agent output)
+   * so the caller can report them, and limits task creation so a graph that
+   * creates tasks for an agent running the same graph cannot recurse forever.
+   * `depth` = how many graph-created tasks lead to this run.
+   */
+  function makeEnv({ owner, run, cwd, projectId, signal, attempt, vars, depth = 0 }) {
+    let created = 0;
+    const env = {
       cwd,
       projectId,
+      flags: { truncated: false, timedOut: false },
       async runAgent(ref, { prompt, system }) {
         let agent;
         if (ref === 'self') {
@@ -106,14 +117,28 @@ export function createWorkflowRunner({ bus, services, runner, runs, log = consol
         } else agent = services.agents.get(ref);
         runs.log(run, 'system', `→ ${agent.name} (${agent.harness}/${agent.model || 'default'})\n`);
         const sys = system ?? (ref === 'self' && vars.system ? vars.system : agentSystemPrompt(agent));
-        return runner.runAgent({ agent, prompt, system: sys, cwd, attempt, run, signal });
+        const res = await runner.runAgent({ agent, prompt, system: sys, cwd, attempt, run, signal });
+        env.flags.truncated ||= Boolean(res.truncated);
+        env.flags.timedOut ||= Boolean(res.timedOut);
+        return res;
       },
       async createTask(spec) {
         if (!projectId) throw new Error('Create task needs a project (run the workflow from a project)');
+        if (depth >= MAX_TASK_DEPTH) throw new Error(`Create task refused: already ${depth} levels of graph-created tasks (limit ${MAX_TASK_DEPTH})`);
+        if (++created > MAX_TASKS_PER_RUN) throw new Error(`Create task refused: more than ${MAX_TASKS_PER_RUN} tasks in one run`);
         if (spec.assigneeId) services.agents.get(spec.assigneeId);
-        return services.tasks.create({ ...spec, projectId });
+        return services.tasks.create({ ...spec, projectId, input: { createdBy: { runId: run.id, depth: depth + 1 } } });
       },
     };
+    return env;
+  }
+
+  /** Working directory for standalone runs: project repo, else a per-run scratch dir (never the server cwd). */
+  function scratchCwd(project, runId) {
+    if (project?.repoPath) return project.repoPath;
+    const dir = join(home || process.cwd(), 'scratch', runId);
+    mkdirSync(dir, { recursive: true });
+    return dir;
   }
 
   function nodeReporter(run, workflowId) {
@@ -126,17 +151,17 @@ export function createWorkflowRunner({ bus, services, runner, runs, log = consol
       const wf = services.workflows.get(workflowId);
       if (wf.scope === 'agent') throw invalidParams('Agent graphs run when their agent executes a task; run a project workflow instead');
       const pid = wf.projectId || projectId || null;
+      const project = pid ? services.projects.get(pid) : null; // validate before creating the run
       const vars = input ?? wf.graph.nodes.find((n) => n.type === 'trigger')?.config?.sample ?? {};
       const run = runs.create({ projectId: pid, kind: 'workflow', meta: { workflowId, workflowName: wf.name } });
       const controller = new AbortController();
       controllers.set(run.id, controller);
       runs.log(run, 'system', `▶ workflow "${wf.name}"\n`);
       bus.publish('workflow.run.started', { projectId: pid, runId: run.id, workflowId });
-      const project = pid ? services.projects.get(pid) : null;
       const promise = runGraph({
         graph: wf.graph,
         vars,
-        env: makeEnv({ owner: null, run, cwd: project?.repoPath || undefined, projectId: pid, signal: controller.signal, attempt: 1, vars }),
+        env: makeEnv({ owner: null, run, cwd: scratchCwd(project, run.id), projectId: pid, signal: controller.signal, attempt: 1, vars }),
         signal: controller.signal,
         onNode: nodeReporter(run, workflowId),
         log: (text, stream) => runs.log(run, stream || 'system', text),
@@ -152,6 +177,8 @@ export function createWorkflowRunner({ bus, services, runner, runs, log = consol
           return { status: 'failed', error: err.message };
         })
         .finally(() => controllers.delete(run.id));
+      inflight.add(promise);
+      promise.finally(() => inflight.delete(promise));
       if (wait) return { runId: run.id, ...(await promise) };
       return { runId: run.id, status: 'running' };
     },
@@ -163,9 +190,16 @@ export function createWorkflowRunner({ bus, services, runner, runs, log = consol
       return true;
     },
 
+    /** Shutdown: abort every standalone run and wait briefly for them to record their outcome. */
+    async cancelAll(waitMs = 8000) {
+      for (const c of controllers.values()) c.abort();
+      if (inflight.size) await Promise.race([Promise.allSettled([...inflight]), new Promise((r) => setTimeout(r, waitMs).unref())]);
+    },
+
     /** runner.agentGraphExecutor: executes the agent's node graph for a task. */
     async executeAgentGraph({ agent, task, project, context, cwd, run, signal, attempt }) {
       const wf = services.workflows.get(agent.config.workflowId);
+      if (wf.scope !== 'agent') throw new Error(`Workflow "${wf.name}" is a project workflow; pick an agent graph for ${agent.name}`);
       const vars = {
         task: { id: task.id, title: task.title, description: task.description, input: task.input, labels: task.labels },
         prompt: context.prompt,
@@ -174,26 +208,25 @@ export function createWorkflowRunner({ bus, services, runner, runs, log = consol
         attempt,
       };
       runs.log(run, 'system', `graph "${wf.name}" (${wf.graph.nodes.length} nodes)\n`);
-      const res = await runGraph({
-        graph: wf.graph,
-        vars,
-        env: makeEnv({ owner: agent, run, cwd, projectId: project.id, signal, attempt, vars }),
-        signal,
-        onNode: nodeReporter(run, wf.id),
-        log: (text, stream) => runs.log(run, stream || 'system', text),
-      });
-      const last = res.result || (res.lastOutput && typeof res.lastOutput === 'object' ? { text: res.lastOutput.text, json: res.lastOutput.json } : { text: res.lastOutput });
-      const text = typeof last?.text === 'string' ? last.text : last?.text === undefined ? '' : JSON.stringify(last.text, null, 2);
-      const json = last?.json && typeof last.json === 'object' && !Array.isArray(last.json) ? last.json : null;
-      const ok = res.status === 'succeeded';
+      const env = makeEnv({ owner: agent, run, cwd, projectId: project.id, signal, attempt, vars, depth: task.input?.createdBy?.depth || 0 });
+      const res = await runGraph({ graph: wf.graph, vars, env, signal, onNode: nodeReporter(run, wf.id), log: (text, stream) => runs.log(run, stream || 'system', text) });
+
+      const toText = (v) => (typeof v === 'string' ? v : v === undefined || v === null ? '' : JSON.stringify(v, null, 2));
+      let text = toText(res.result?.text);
+      let json = res.result?.json && typeof res.result.json === 'object' && !Array.isArray(res.result.json) ? res.result.json : null;
+      if (res.status === 'succeeded' && !res.result) {
+        // The graph ended without reaching an Output node: never report that as a silent success.
+        text = toText(res.lastOutput?.text ?? res.lastOutput);
+        json = { status: 'needs_review', summary: `Graph "${wf.name}" finished without reaching an Output node` };
+      }
       return {
-        code: ok ? 0 : 1,
+        code: res.status === 'succeeded' ? 0 : 1,
         output: json ? `${text}\n\n\`\`\`json\n${JSON.stringify(json, null, 2)}\n\`\`\`\n` : text,
-        stderr: res.error || '',
+        stderr: res.error ? `${res.failedNode ? `[${res.failedNode}] ` : ''}${res.error}` : '',
         result: json,
         cancelled: res.status === 'cancelled',
-        timedOut: false,
-        truncated: false,
+        timedOut: env.flags.timedOut,
+        truncated: env.flags.truncated,
       };
     },
   };

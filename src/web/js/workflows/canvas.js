@@ -5,7 +5,10 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /** Output ports of a node: routers derive them from their rules. */
 export function outputPorts(node, typeInfo) {
-  if (node.type === 'router') return [...new Set([...(node.config?.rules || []).map((r) => r.port).filter(Boolean), 'else'])];
+  if (node.type === 'router') {
+    const config = { ...(typeInfo?.defaults || {}), ...(node.config || {}) };
+    return [...new Set([...(config.rules || []).map((r) => r.port).filter(Boolean), 'else', ...(config.mode === 'agent' ? ['error'] : [])])];
+  }
   return typeInfo?.staticOutputs || [];
 }
 
@@ -73,7 +76,8 @@ export function createCanvas({ types, onChange, onSelect }) {
       const selected = selection?.type === 'edge' && selection.id === e.id;
       const g = svg('g', { class: 'wf-edge-group' });
       const hit = svg('path', { d, class: 'wf-edge-hit' });
-      const line = svg('path', { d, class: `wf-edge${selected ? ' selected' : ''}${status.get(e.from)?.status === 'done' ? ' flowed' : ''}` });
+      const flowed = status.get(e.from)?.ports?.includes(e.fromPort);
+      const line = svg('path', { d, class: `wf-edge${selected ? ' selected' : ''}${flowed ? ' flowed' : ''}` });
       hit.addEventListener('mousedown', (ev) => {
         ev.stopPropagation();
         select({ type: 'edge', id: e.id });
@@ -267,6 +271,10 @@ export function createCanvas({ types, onChange, onSelect }) {
     getGraph: () => graph,
     refreshNode,
     redraw: render,
+    /** Keeps wires attached when a router route is renamed. */
+    renamePort(nodeId, from, to) {
+      for (const e of graph.edges) if (e.from === nodeId && e.fromPort === from) e.fromPort = to;
+    },
     /** Adds a node at the centre of the visible area. */
     addNode(type, config) {
       const info = typeOf(type);

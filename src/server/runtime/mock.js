@@ -20,8 +20,10 @@ const sleep = (ms, signal) =>
  */
 function answerHints(prompt) {
   const out = {};
-  for (const m of prompt.matchAll(/"(\w+)"\s*:\s*"([\w-]+)"\s*\|/g)) out[m[1]] ??= m[2];
-  const routes = prompt.match(/^Routes: (.+)$/m);
+  // Board task prompts (built by the context builder) only honour explicit MOCK lines.
+  const structured = !prompt.startsWith('# Task:');
+  if (structured) for (const m of prompt.matchAll(/"(\w+)"\s*:\s*"([\w-]+)"\s*\|/g)) out[m[1]] ??= m[2];
+  const routes = structured && prompt.match(/^Routes: (.+)$/m);
   if (routes) {
     out.route = routes[1].split(',')[0].trim();
     out.reason = 'simulated decision';
