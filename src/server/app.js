@@ -12,6 +12,7 @@ import { createRunStore } from './runtime/runs.js';
 import { createRunner } from './runtime/runner.js';
 import { createScheduler } from './runtime/scheduler.js';
 import { registerRuntimeRpc } from './runtime/rpc.js';
+import { createWorkflowRunner, createWorkflowService, registerWorkflowRpc } from './domain/workflows.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
 
@@ -39,10 +40,13 @@ export function createApp(options = {}) {
   projects.ensureDefault();
   agents.seedStarterTeam();
 
-  const services = { projects, tasks, agents };
+  const workflows = createWorkflowService({ db, bus });
+  const services = { projects, tasks, agents, workflows };
   const runs = createRunStore({ db, bus });
   const runner = createRunner({ bus, services, runs, home, log });
   const scheduler = createScheduler({ bus, services, runner, log });
+  const wfRunner = createWorkflowRunner({ bus, services, runner, runs, log });
+  runner.agentGraphExecutor = wfRunner.executeAgentGraph;
   if (options.recover) runner.recoverInterrupted();
 
   const app = {
@@ -56,6 +60,7 @@ export function createApp(options = {}) {
     runs,
     runner,
     scheduler,
+    wfRunner,
     /** Hooks run on shutdown (child processes, remote connections, timers). */
     disposers: [
       async () => {
@@ -98,6 +103,7 @@ export function createApp(options = {}) {
   registerTaskRpc(rpc, tasks, projects);
   registerAgentRpc(rpc, { agents, tasks, projects });
   registerRuntimeRpc(rpc, { runner, scheduler, runs, services, log });
+  registerWorkflowRpc(rpc, { workflows, wfRunner, services });
 
   return app;
 }

@@ -100,4 +100,20 @@ export const migrations = [
       ALTER TABLE tasks ADD COLUMN worktree_path TEXT;
     `,
   },
+  {
+    id: '004_workflows',
+    up: `
+      CREATE TABLE workflows (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        scope TEXT NOT NULL DEFAULT 'project',
+        graph TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_workflows_project ON workflows(project_id);
+    `,
+  },
 ];
