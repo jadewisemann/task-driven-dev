@@ -20,6 +20,12 @@ async function git(cwd, args, { allowFail = false } = {}) {
   return { ok: res.code === 0, out: res.stdout.trim(), err: res.stderr.trim() };
 }
 
+/** The user's git identity when configured, else a bot identity (merges and commits both need one). */
+async function identityArgs(cwd) {
+  const hasIdentity = (await git(cwd, ['config', 'user.email'], { allowFail: true })).out !== '';
+  return hasIdentity ? [] : ['-c', 'user.name=todo-devs', '-c', 'user.email=todo-devs@localhost'];
+}
+
 export async function isGitRepo(path) {
   if (!path || !existsSync(path)) return false;
   const res = await git(path, ['rev-parse', '--is-inside-work-tree'], { allowFail: true });
@@ -71,14 +77,14 @@ export function ensureWorktree({ repoPath, root, task, baseRef = 'HEAD', upstrea
         log(`WARNING: predecessor branch ${upstream} not found — its work is not included`);
         continue;
       }
-      const res = await git(path, ['merge', '--no-edit', '--no-ff', '-m', `todo-devs: merge ${upstream}`, upstream], { allowFail: true });
+      const res = await git(path, [...(await identityArgs(path)), 'merge', '--no-edit', '--no-ff', '-m', `todo-devs: merge ${upstream}`, upstream], { allowFail: true });
       if (res.ok) {
         merged.push(upstream);
         log(`merged predecessor branch ${upstream}`);
       } else {
         await git(path, ['merge', '--abort'], { allowFail: true });
         conflicts.push(upstream);
-        log(`WARNING: could not merge ${upstream} (conflict) — continuing without it`);
+        log(`WARNING: could not merge ${upstream} — continuing without it: ${(res.err || res.out).split('\n')[0]}`);
       }
     }
     return { path, branch, merged, conflicts };
@@ -91,10 +97,7 @@ export function commitAll({ repoPath, path, message }) {
     await git(path, ['add', '-A']);
     const status = await git(path, ['status', '--porcelain']);
     if (!status.out) return null;
-    // Use the user's git identity when configured; fall back to a bot identity.
-    const hasIdentity = (await git(path, ['config', 'user.email'], { allowFail: true })).out !== '';
-    const identity = hasIdentity ? [] : ['-c', 'user.name=todo-devs', '-c', 'user.email=todo-devs@localhost'];
-    await git(path, [...identity, 'commit', '-q', '-m', message]);
+    await git(path, [...(await identityArgs(path)), 'commit', '-q', '-m', message]);
     return (await git(path, ['rev-parse', 'HEAD'])).out;
   });
 }

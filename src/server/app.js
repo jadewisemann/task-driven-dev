@@ -108,10 +108,13 @@ export function createApp(options = {}) {
       return response.result;
     },
 
-    /** Idempotent: a second call is a no-op. */
-    async close() {
-      if (app.closed) return;
-      app.closed = true;
+    /** Idempotent: every call (also concurrent ones) waits for the same shutdown. */
+    close() {
+      app.closing ||= app._close();
+      return app.closing;
+    },
+
+    async _close() {
       for (const dispose of app.disposers.splice(0).reverse()) {
         try {
           await dispose();

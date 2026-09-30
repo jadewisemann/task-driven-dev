@@ -134,7 +134,11 @@ test('sse stream delivers published events with numeric ids', async (t) => {
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
   await app.call('projects.create', { name: 'sse' });
   let text = '';
-  while (!text.includes('project.created')) text += (await reader.read()).value;
+  while (!text.includes('project.created')) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    text += value;
+  }
   controller.abort();
   assert.match(text, /id: \d+\ndata: \{.*"type":"project\.created"/);
 });

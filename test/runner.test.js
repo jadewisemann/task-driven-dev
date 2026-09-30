@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runProcess } from '../src/server/runtime/process.js';
 import { boardStatusFor, parseResult } from '../src/server/runtime/result.js';
-import { makeApp, nextEvent, setup, sleep } from './helpers.js';
+import { makeApp, nextEvent, setup, waitFor } from './helpers.js';
 
 test('process: background children cannot keep a run alive', async () => {
   const t0 = Date.now();
@@ -68,10 +68,13 @@ test('scheduler: diamond DAG, retries, blocking, release after fix, stop', async
   assert.equal(await status(F), 'done', 'blocked successor released after the fix');
 
   const G = await mk('G', [], { mock: { delayMs: 3000 } });
+  const gStarted = nextEvent(app, (e) => e.type === 'run.started' && e.payload.run.taskId === G.id);
   await app.call('scheduler.start', { projectId: project.id });
-  await sleep(200);
+  await gStarted;
+  assert.equal(await status(G), 'running');
+  const gFinished = nextEvent(app, (e) => e.type === 'run.finished' && e.payload.run.taskId === G.id);
   await app.call('scheduler.stop', { projectId: project.id });
-  await sleep(300);
+  assert.equal((await gFinished).payload.run.status, 'stopped');
   assert.equal(await status(G), 'todo', 'stopped task returns to todo');
 });
 
@@ -80,13 +83,13 @@ test('runner: running tasks cannot be moved; deleting cancels; backlog is never 
   const { project, mock } = await setup(app);
   const busy = await app.call('tasks.create', { projectId: project.id, title: 'busy', status: 'todo', assigneeId: mock.id, input: { mock: { delayMs: 800 } } });
   const run = app.runner.executeTask(busy.id);
-  await sleep(50);
+  await waitFor(() => app.runner.isTaskActive(busy.id) && app.services.tasks.get(busy.id).status === 'running');
   await assert.rejects(app.call('tasks.move', { id: busy.id, status: 'done' }), /running/);
   await run;
 
   const doomed = await app.call('tasks.create', { projectId: project.id, title: 'doomed', status: 'todo', assigneeId: mock.id, input: { mock: { delayMs: 2000 } } });
   const pending = app.runner.executeTask(doomed.id);
-  await sleep(50);
+  await waitFor(() => app.services.tasks.get(doomed.id).status === 'running');
   await app.call('tasks.delete', { id: doomed.id });
   const res = await pending;
   assert.equal(res.outcome, 'cancelled');

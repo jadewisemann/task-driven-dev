@@ -54,10 +54,13 @@ test('orchestrator: apply validates edits; discard sticks; restart fails stuck p
   const { project, agents } = await setup(app);
   const lead = agents.find((a) => a.role === 'orchestrator');
   await app.call('agents.update', { id: lead.id, harness: 'shell', config: { command: 'sleep 2; echo nothing' } });
+  const planningRun = nextEvent(app, (e) => e.type === 'run.started' && e.payload.run.kind === 'orchestration');
   const p1 = await app.call('orchestrator.plan', { projectId: project.id, goal: 'A, B', autoRun: true });
-  await sleep(200);
+  const { run } = (await planningRun).payload;
   await app.call('orchestrator.discard', { planId: p1.id });
-  await sleep(2500);
+  // The planner is aborted by the discard; its run must end without resurrecting the plan.
+  await waitFor(() => app.runs.get(run.id).status !== 'running');
+  await sleep(100);
   assert.equal((await app.call('orchestrator.get', { planId: p1.id })).status, 'discarded');
   assert.equal((await app.call('tasks.list', { projectId: project.id })).length, 0);
 

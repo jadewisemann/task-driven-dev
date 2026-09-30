@@ -7,7 +7,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # push + pull_request for the same branch share a group, so only the newest run is kept
+  group: ci-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -66,7 +67,7 @@ jobs:
         run: npx expo-doctor
         continue-on-error: true
       - name: Bundle for iOS and Android
-        run: npx expo export --platform ios --platform android --output-dir dist
+        run: npm run export
       - name: Upload resolved dependency manifest
         if: always()
         uses: actions/upload-artifact@v4

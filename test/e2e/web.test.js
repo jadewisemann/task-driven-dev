@@ -98,7 +98,7 @@ test('runner: Run all executes in dependency order with live logs', async (t) =>
   await page.click('text=▶ Run all');
   await page.click('.modal .btn.primary');
   await page.waitForSelector('.sched-finished', { timeout: 20000 });
-  assert.equal(await page.locator('.col-done .card').count(), 2);
+  await page.waitForFunction(() => document.querySelectorAll('.col-done .card').length === 2);
   await page.click('.card >> text=B second');
   await page.waitForSelector('.log-console span');
   assert.match(await page.locator('.log-console').innerText(), /Mocky/);
@@ -135,8 +135,15 @@ test('workflows: create from template, connect a node, run it', async (t) => {
   const edgesBefore = await page.locator('.wf-edge-group').count();
   await page.click('.pal-item:has-text("Transform")');
   await page.locator('.wf-node:has-text("Incoming item") .port-out').first().dragTo(page.locator('.wf-node:has-text("Transform") .wf-node-body'));
-  assert.equal(await page.locator('.wf-edge-group').count(), edgesBefore + 1);
+  await page.waitForFunction((n) => document.querySelectorAll('.wf-edge-group').length === n, edgesBefore + 1);
   await page.click('.save-btn');
+  // Hold the workflows.run response so the run's finished event always arrives first
+  // (regression test: the panel used to stay on "running…").
+  await page.route('**/api/rpc', async (route) => {
+    const response = await route.fetch();
+    if ((route.request().postData() || '').includes('"workflows.run"')) await new Promise((r) => setTimeout(r, 800));
+    await route.fulfill({ response });
+  });
   await page.click('text=▶ Run');
   await page.click('.modal .btn.primary');
   await page.waitForFunction(() => /succeeded|failed|cancelled/.test(document.querySelector('.run-status')?.textContent || ''), null, { timeout: 15000 });

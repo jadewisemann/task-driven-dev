@@ -14,21 +14,36 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Simulated agents finish quickly in tests.
 process.env.TODO_DEVS_MOCK_DELAY_MS ??= '40';
 
+const stacks = new WeakMap();
+/**
+ * Registers cleanup for a test. Cleanups run last-in-first-out (node:test runs
+ * t.after hooks in registration order), so a directory is removed only after
+ * the servers and apps using it have stopped.
+ */
+export function onCleanup(t, fn) {
+  let stack = stacks.get(t);
+  if (!stack) {
+    stack = [];
+    stacks.set(t, stack);
+    t.after(async () => {
+      while (stack.length) await stack.pop()();
+    });
+  }
+  stack.push(fn);
+}
+
 /** Fresh data directory, removed after the test. */
 export function tmpHome(t) {
   const dir = mkdtempSync(join(tmpdir(), 'todo-devs-test-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  onCleanup(t, () => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
 
 /** An app on a throwaway home (closed + removed after the test). */
 export function makeApp(t, options = {}) {
-  const home = options.home || mkdtempSync(join(tmpdir(), 'todo-devs-test-'));
+  const home = options.home || tmpHome(t);
   const app = createApp({ home, log: () => {}, ...options });
-  t.after(async () => {
-    await app.close();
-    if (!options.home) rmSync(home, { recursive: true, force: true });
-  });
+  onCleanup(t, () => app.close());
   return app;
 }
 
@@ -36,7 +51,8 @@ export function makeApp(t, options = {}) {
 export async function listen(t, app, options = {}) {
   const server = createHttpServer(app, options);
   await new Promise((resolve) => server.listen(options.port || 0, '127.0.0.1', resolve));
-  t.after(
+  onCleanup(
+    t,
     () =>
       new Promise((resolve) => {
         server.closeAllConnections?.();
@@ -114,10 +130,14 @@ export async function startDaemon(t, home, extraArgs = [], env = {}) {
   const stop = () =>
     new Promise((resolve) => {
       if (child.exitCode !== null) return resolve();
-      child.once('exit', () => resolve());
+      const force = setTimeout(() => child.kill('SIGKILL'), 5000);
+      child.once('exit', () => {
+        clearTimeout(force);
+        resolve();
+      });
       child.kill('SIGTERM');
     });
-  t.after(stop);
+  onCleanup(t, stop);
   const daemonFile = join(home, 'daemon.json');
   const info = await waitFor(() => {
     if (child.exitCode !== null) throw new Error(`server exited: ${output}`);

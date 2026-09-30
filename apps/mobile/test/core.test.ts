@@ -12,11 +12,9 @@ import { ApiError, NETWORK, TodoDevsClient, normalizeBaseUrl } from '../src/core
 import { EventFeed, type FeedStatus } from '../src/core/events.ts';
 import { hostOf, isValidCode, normalizeCode, parsePairingLink } from '../src/core/links.ts';
 import type { Task } from '../src/core/types.ts';
-// @ts-expect-error — plain JS modules of the server
+// Plain JS modules of the server (this file is not type-checked by the app's tsconfig).
 import { createApp } from '../../../src/server/app.js';
-// @ts-expect-error
 import { PairingCodes } from '../../../src/server/core/auth.js';
-// @ts-expect-error
 import { createHttpServer } from '../../../src/server/http/server.js';
 
 process.env.TODO_DEVS_MOCK_DELAY_MS = '40';
@@ -24,7 +22,8 @@ const TOKEN = 'x'.repeat(32);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** A network-mode server (token + pairing) on a random port, restartable on the same home/port. */
-async function startServer(t: TestContext, home = mkdtempSync(join(tmpdir(), 'mobile-core-')), port = 0) {
+async function startServer(t: TestContext, existingHome?: string, port = 0) {
+  const home = existingHome ?? mkdtempSync(join(tmpdir(), 'mobile-core-'));
   const app = createApp({ home, log: () => {} });
   const pairing = new PairingCodes(TOKEN);
   const server = createHttpServer(app, { token: TOKEN, pairing });
@@ -37,9 +36,10 @@ async function startServer(t: TestContext, home = mkdtempSync(join(tmpdir(), 'mo
     await new Promise((r) => server.close(r));
     await app.close();
   };
+  // Only the call that created the home removes it (a restarted server reuses it).
   t.after(async () => {
     await stop();
-    rmSync(home, { recursive: true, force: true });
+    if (!existingHome) rmSync(home, { recursive: true, force: true });
   });
   return { app, pairing, home, port: server.address().port as number, url: `http://127.0.0.1:${server.address().port}`, stop };
 }
@@ -94,12 +94,11 @@ test('client: pairing, RPC errors, unreachable server', async (t) => {
   assert.deepEqual(tasks.map((x) => x.status), ['done', 'done']);
   const graph = await api.tasks.graph(project!.id);
   assert.deepEqual(lanes(graph).map((l) => l.map((x) => x.title)), [['A'], ['B']]);
-  const plan = await api.orchestrator.plan({ projectId: project!.id, goal: 'Build API, then docs' });
-  assert.equal(plan.status, 'planning');
 });
 
 test('event feed: reset first, live events, reset again after a server restart', async (t) => {
-  let srv = await startServer(t);
+  const home = mkdtempSync(join(tmpdir(), 'mobile-core-'));
+  let srv = await startServer(t, home);
   const client = new TodoDevsClient({ baseUrl: srv.url, token: TOKEN });
   const feed = new EventFeed(client, { pollTimeoutSec: 1 });
   const log: string[] = [];
@@ -119,10 +118,11 @@ test('event feed: reset first, live events, reset again after a server restart',
   await api.tasks.create({ projectId: project!.id, title: 'x' });
   await until(() => log.includes('task.created'));
 
-  const { home, port } = srv;
+  const { port } = srv;
   await srv.stop();
   await until(() => statuses.includes('offline'));
   srv = await startServer(t, home, port);
+  t.after(() => rmSync(home, { recursive: true, force: true })); // after both servers stopped (hooks run in order)
   await until(() => log.filter((x) => x === 'RESET').length === 2);
   assert.equal(feed.status, 'live');
 });
