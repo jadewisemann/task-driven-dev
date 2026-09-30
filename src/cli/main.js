@@ -1,5 +1,8 @@
 import { runBridge } from '../remote/bridge.js';
 import { openSession } from './client.js';
+import { pairingInfo } from './pairing.js';
+import { rotateToken } from '../server/core/auth.js';
+import { readDaemonInfo, resolveHome } from '../server/core/paths.js';
 import { serve } from './serve.js';
 
 const HELP = `todo.devs — agent kanban with dependency scheduling, orchestration and remote sessions
@@ -15,6 +18,11 @@ Board (current project = first one, or --project ID)
   todo-devs plan "<goal>" [--run] [--wait]  Orchestrator: natural language → tasks (→ run)
   todo-devs run [--concurrency 2] [--auto-approve]   Run everything in dependency order
   todo-devs stop
+
+Mobile app / other devices
+  todo-devs serve --host 0.0.0.0            Listen on the network (token required, kept in auth.json)
+  todo-devs pair [--host 100.x.y.z]         Print pairing links (open the app link on the phone)
+  todo-devs token rotate                    New token; paired devices must pair again (restart server)
 
 Remote sessions (SSH)
   todo-devs peer add <name> <user@host> [--port 22] [--identity ~/.ssh/key]
@@ -55,7 +63,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** @returns {Promise<number|void>} exit code */
 export async function runCli(positionals, flags) {
   const [command] = positionals;
-  if (command === 'serve' || command === 'rpc' || command === 'help' || command === undefined) return runCommand(positionals, flags, null);
+  if (['serve', 'rpc', 'help', 'pair', 'token', undefined].includes(command)) return runCommand(positionals, flags, null);
   if (flags.peer === true) throw new Error('--peer needs a peer name');
   const session = await openSession({ home: flags.home });
   try {
@@ -89,6 +97,25 @@ async function runCommand(positionals, flags, session) {
       const allowedHosts = typeof flags['allow-host'] === 'string' ? flags['allow-host'].split(',') : [];
       await serve({ home: flags.home, port: flags.port ?? 7420, host: flags.host ?? '127.0.0.1', allowedHosts, token: flags.token });
       return new Promise(() => {}); // keep running until a signal arrives
+    }
+    case 'pair': {
+      const daemon = readDaemonInfo(resolveHome(flags.home));
+      if (!daemon) throw new Error('no server running — start one with `todo-devs serve --host 0.0.0.0`');
+      const info = pairingInfo(daemon, { publicHost: typeof flags.host === 'string' ? flags.host : undefined });
+      if (flags.json) return print(info, flags);
+      if (!info.enabled) {
+        console.log(info.reason);
+        return 1;
+      }
+      console.log('Open the app link on your phone (e.g. send it to yourself) or paste it in the app. Keep it private.');
+      for (const l of info.links) console.log(`\n${l.label}\n  app: ${l.deepLink}\n  web: ${l.web}`);
+      return 0;
+    }
+    case 'token': {
+      if (rest[0] !== 'rotate') throw new Error('usage: todo-devs token rotate');
+      rotateToken(resolveHome(flags.home));
+      console.log('token rotated — restart `todo-devs serve` and pair your devices again');
+      return 0;
     }
     case 'rpc':
       await runBridge({ home: flags.home });

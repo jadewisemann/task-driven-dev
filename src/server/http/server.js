@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tokenMatches } from '../core/auth.js';
 
 const WEB_ROOT = resolve(fileURLToPath(new URL('../../web/', import.meta.url)));
 const MAX_BODY = 5 * 1024 * 1024;
@@ -110,15 +111,37 @@ function isAllowedOrigin(origin, extraHosts) {
 
 const isJsonContentType = (value) => String(value || '').split(';')[0].trim().toLowerCase() === 'application/json';
 
-function hasValidToken(req, url, token) {
-  if (!token) return true;
-  return req.headers['x-todo-devs-token'] === token || url.searchParams.get('token') === token;
+const presentedToken = (req, url) => req.headers['x-todo-devs-token'] || url.searchParams.get('token') || undefined;
+
+/**
+ * Long-poll for events (mobile app / clients without EventSource).
+ *   GET /api/events/poll?after=<cursor>&timeout=<sec>&peer=<id|name>
+ * Without `peer` only local events are returned; with it, that session's relayed events.
+ */
+async function pollEvents(req, res, app, url) {
+  const after = Math.max(0, Number(url.searchParams.get('after')) || 0);
+  const timeoutMs = Math.min(55, Math.max(0, Number(url.searchParams.get('timeout') ?? 25))) * 1000;
+  let peerId = null;
+  const peerParam = url.searchParams.get('peer');
+  if (peerParam && peerParam !== 'local') {
+    try {
+      peerId = app.peers.store.get(peerParam).id;
+    } catch {
+      return sendJson(res, 404, { error: `Unknown peer: ${peerParam}` });
+    }
+  }
+  const filter = (e) => (e.peer || null) === peerId;
+  const controller = new AbortController();
+  req.on('close', () => controller.abort());
+  const result = await app.history.wait(after, filter, { timeoutMs, signal: controller.signal });
+  if (!res.destroyed) sendJson(res, 200, result);
 }
 
 /**
  * HTTP entry point.
  *   POST /api/rpc   {method, params, peer?}  -> JSON-RPC style {result} | {error}
  *   GET  /api/events                          -> Server-Sent Events stream
+ *   GET  /api/events/poll?after=&timeout=&peer= -> long-poll (mobile)
  *   GET  /api/health
  *   GET  /*                                   -> web UI
  *
@@ -128,13 +151,26 @@ function hasValidToken(req, url, token) {
 export function createHttpServer(app, { allowedHosts = [], token } = {}) {
   return createServer(async (req, res) => {
     try {
-      if (!isAllowedHost(req.headers.host, allowedHosts)) return sendJson(res, 403, { error: 'Host not allowed' });
-      if (!isAllowedOrigin(req.headers.origin, allowedHosts)) return sendJson(res, 403, { error: 'Origin not allowed' });
       const url = new URL(req.url, 'http://local');
       const { pathname } = url;
+      const isApi = pathname.startsWith('/api/');
+      const authed = Boolean(token) && tokenMatches(token, presentedToken(req, url));
+
+      /*
+       * Loopback mode (no token): the Host/Origin allow-lists protect everything.
+       * Token mode (LAN, Tailscale, mobile app): API calls must carry the token and
+       * may come through any host name; a valid token is what authorises them.
+       * The static UI is public (it holds no data) so it loads from any address.
+       */
+      if (!token) {
+        if (!isAllowedHost(req.headers.host, allowedHosts)) return sendJson(res, 403, { error: 'Host not allowed' });
+        if (!isAllowedOrigin(req.headers.origin, allowedHosts)) return sendJson(res, 403, { error: 'Origin not allowed' });
+      } else if (isApi && pathname !== '/api/health' && !authed) {
+        return sendJson(res, 401, { error: 'Missing or invalid token' });
+      }
 
       if (pathname === '/api/health') return sendJson(res, 200, { ok: true, name: 'todo-devs', version: app.version, auth: Boolean(token) });
-      if (pathname.startsWith('/api/') && !hasValidToken(req, url, token)) return sendJson(res, 401, { error: 'Missing or invalid token' });
+      if (pathname === '/api/events/poll' && req.method === 'GET') return await pollEvents(req, res, app, url);
       if (pathname === '/api/events' && req.method === 'GET') return openEventStream(req, res, app);
       if (pathname === '/api/rpc') {
         if (req.method !== 'POST') return sendJson(res, 405, { error: 'Use POST' });

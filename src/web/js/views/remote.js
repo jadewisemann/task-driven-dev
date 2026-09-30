@@ -105,12 +105,38 @@ export const remoteView = {
       );
     }
 
+    /** Links that pair the todo.devs mobile app (or another browser) with this server. */
+    function pairingPanel(info) {
+      if (!info) return null;
+      const copy = (text) => () => navigator.clipboard?.writeText(text).then(() => toast('Copied — keep it private', 'success'), () => toast(text));
+      return h(
+        'div',
+        { class: 'panel help-panel' },
+        h('h4', {}, 'Mobile app'),
+        info.enabled
+          ? [
+              h('p', { class: 'small' }, 'Open one of these links on your phone (or paste it into the app’s “Add server” screen). Anyone with the link has full access — share it only with yourself.'),
+              info.links.map((l) =>
+                h(
+                  'div',
+                  { class: 'pair-row' },
+                  h('span', { class: 'muted small' }, l.label),
+                  h('button', { class: 'btn small', onClick: copy(l.deepLink) }, 'Copy app link'),
+                  h('button', { class: 'btn small ghost', onClick: copy(l.web) }, 'Copy browser link'),
+                ),
+              ),
+            ]
+          : h('p', { class: 'muted small' }, info.reason),
+      );
+    }
+
     async function load() {
-      const peers = await call('peers.list');
+      const [peers, pairing] = await Promise.all([call('peers.list'), call('system.pairing').catch(() => null)]);
       mountInto(
         root,
         h('div', { class: 'toolbar' }, h('div', { class: 'toolbar-title' }, h('h2', {}, 'Remote sessions'), h('span', { class: 'muted' }, 'Control todo.devs on other machines over SSH — same board, agents and flows.')), h('button', { class: 'btn primary', onClick: act(addPeer) }, '+ Add remote')),
         peers.length ? h('div', { class: 'grid-cards' }, peers.map(peerCard)) : h('div', { class: 'empty' }, 'No remote sessions yet.'),
+        pairingPanel(pairing),
         h(
           'div',
           { class: 'panel help-panel' },

@@ -16,6 +16,7 @@ import { createWorkflowRunner, createWorkflowService, registerWorkflowRpc } from
 import { createOrchestrator, registerOrchestratorRpc } from './orchestrator/orchestrator.js';
 import { createPeerManager, registerPeerRpc } from './remote/peers.js';
 import { toRpcError } from './core/errors.js';
+import { EventHistory } from './core/history.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
 
@@ -33,6 +34,7 @@ export function createApp(options = {}) {
   db.migrate(migrations);
 
   const bus = new EventBus();
+  const history = new EventHistory(bus);
   const rpc = new RpcRegistry();
   const log = options.log || ((err) => console.error('[todo-devs]', err));
 
@@ -70,12 +72,14 @@ export function createApp(options = {}) {
     wfRunner,
     orchestrator,
     peers,
+    history,
     /** Hooks run on shutdown (child processes, remote connections, timers). */
     disposers: [
       async () => {
         scheduler.stopAll();
         orchestrator.abortAll();
         peers.closeAll();
+        history.close();
         await Promise.all([runner.cancelAll(), wfRunner.cancelAll()]);
         runs.close(); // late output from runs that outlived the wait is dropped, never written to a closed DB
       },
