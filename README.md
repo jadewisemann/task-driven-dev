@@ -92,6 +92,18 @@ todo-devs call <method> [json] | methods        # 모든 기능은 JSON-RPC 메�
 
 실행 중인 서버가 있으면 CLI 는 그 서버로 호출합니다. `run`/`plan` 은 서버가 필요합니다.
 
+## 테스트 / CI
+
+```bash
+npm test                 # 서버 테스트 42개 (node:test, 의존성 없음 — git 과 sh 만 필요)
+npm i --no-save playwright && npx playwright install chromium && npm run test:e2e   # 웹 UI 5개 흐름
+cd apps/mobile && npm ci && npx tsc --noEmit && npm test && npx expo-doctor && npm run export
+```
+
+GitHub Actions(`.github/workflows/ci.yml`)가 push/PR 마다 실행합니다:
+서버 테스트는 **macOS·Linux × Node 22·24**, 웹 e2e 는 Chromium, 모바일은 `npm ci` → 타입체크 → 코어 테스트 → `expo-doctor` → iOS·Android 번들 생성까지.
+원격(SSH) 테스트는 `test/fixtures/bin/ssh` 가짜 ssh 로 원격 명령을 그대로 `sh -c` 실행해 검증합니다.
+
 ## 보안 메모
 
 - 기본 바인딩은 `127.0.0.1`. Host/Origin 검사, `application/json` 강제로 DNS 리바인딩·CSRF 차단.
@@ -120,5 +132,7 @@ src/server/orchestrator/  플래너, 할당기, 플랜 수명주기
 src/server/remote/        피어 관리, 원격 클라이언트
 src/web/                  빌드 없는 ES 모듈 UI
 apps/mobile/              React Native(Expo) 앱 — src/core 는 React 비의존 TS (RPC·롱폴링·페어링)
+test/                     서버 테스트, test/e2e 웹 UI 테스트, fixtures(가짜 ssh)
+.github/workflows/ci.yml  CI
 docs/PLAN.md              구현 계획
 ```
