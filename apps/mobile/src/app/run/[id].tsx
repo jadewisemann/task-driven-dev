@@ -1,58 +1,79 @@
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { FlatList, Text, View } from 'react-native';
 import { timeAgo } from '../../core/board.ts';
 import type { LogLine, Run } from '../../core/types.ts';
 import { useSession } from '../../state/connection.tsx';
+import { withSession } from '../../ui/RequireSession.tsx';
 import { Badge, Button, ErrorText, Muted, Row, monoFont } from '../../ui/components.tsx';
 import { colors } from '../../ui/theme.ts';
 
 const MAX_LINES = 3000;
-const STREAM_COLOR = { stdout: colors.text, stderr: '#ff8fa3', system: colors.accent2 };
+const PAGE = 2000;
+const STREAM_COLOR: Record<LogLine['stream'], string> = { stdout: colors.text, stderr: '#ff8fa3', system: colors.accent2 };
 
 /**
  * Live log: pages the history in, then appends `run.log` events from the feed.
- * Live lines that arrive while history is loading are buffered and merged by id.
+ * - only the newest history load may write (a reset mid-load restarts it cleanly);
+ * - live lines arriving meanwhile are buffered and merged by id;
+ * - appends are batched per frame and rendered in a virtualized list.
  */
-export default function RunScreen() {
+function RunScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const runId = String(id);
   const { api, feed } = useSession();
   const [run, setRun] = useState<Run | null>(null);
   const [lines, setLines] = useState<LogLine[]>([]);
   const [error, setError] = useState<unknown>(null);
-  const scroll = useRef<ScrollView>(null);
+  const list = useRef<FlatList<LogLine>>(null);
   const follow = useRef(true);
 
   useEffect(() => {
     let cancelled = false;
     let lastId = 0;
-    let loading = true;
+    let loadSeq = 0;
+    let loading = false;
     let pending: LogLine[] = [];
-    const append = (incoming: LogLine[]) => {
-      const fresh = incoming.filter((l) => l.id > lastId).sort((a, b) => a.id - b.id);
-      if (!fresh.length) return;
+    let batch: LogLine[] = [];
+    let frame: ReturnType<typeof setTimeout> | null = null;
+
+    const flush = () => {
+      frame = null;
+      const fresh = batch.filter((l) => l.id > lastId).sort((a, b) => a.id - b.id);
+      batch = [];
+      if (!fresh.length || cancelled) return;
       lastId = fresh[fresh.length - 1]!.id;
       setLines((prev) => [...prev, ...fresh].slice(-MAX_LINES));
     };
+    const append = (incoming: LogLine[], now = false) => {
+      batch.push(...incoming);
+      if (now) flush();
+      else if (!frame) frame = setTimeout(flush, 100);
+    };
+
     async function loadHistory() {
+      const mine = ++loadSeq;
       loading = true;
       try {
         for (;;) {
           const page = await api.runs.logs(runId, lastId);
-          if (cancelled) return;
-          append(page);
-          if (page.length < 2000) break;
+          if (cancelled || mine !== loadSeq) return;
+          append(page, true);
+          if (page.length < PAGE) break;
         }
-        setRun(await api.runs.get(runId));
+        const r = await api.runs.get(runId);
+        if (!cancelled && mine === loadSeq) setRun(r);
       } catch (err) {
-        if (!cancelled) setError(err);
+        if (!cancelled && mine === loadSeq) setError(err);
       } finally {
-        loading = false;
-        append(pending);
-        pending = [];
+        if (mine === loadSeq) {
+          loading = false;
+          append(pending);
+          pending = [];
+        }
       }
     }
+
     const offEvents = feed.subscribe((e) => {
       if (e.type === 'run.log' && e.payload.runId === runId) {
         const line: LogLine = { id: e.payload.id, ts: e.payload.ts, stream: e.payload.stream, text: e.payload.text };
@@ -62,18 +83,15 @@ export default function RunScreen() {
         setRun(e.payload.run as Run);
       }
     });
-    const offReset = feed.onReset(() => void loadHistory()); // missed lines after a reconnect
+    const offReset = feed.onReset(() => void loadHistory()); // catch up on lines missed while offline
     void loadHistory();
     return () => {
       cancelled = true;
+      if (frame) clearTimeout(frame);
       offEvents();
       offReset();
     };
   }, [api, feed, runId]);
-
-  useEffect(() => {
-    if (follow.current) requestAnimationFrame(() => scroll.current?.scrollToEnd({ animated: false }));
-  }, [lines]);
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, padding: 12, gap: 8 }}>
@@ -89,24 +107,28 @@ export default function RunScreen() {
         </Text>
       ) : null}
       <ErrorText error={error} />
-      <ScrollView
-        ref={scroll}
+      <FlatList
+        ref={list}
+        data={lines}
+        keyExtractor={(l) => String(l.id)}
         style={{ flex: 1, backgroundColor: '#07080c', borderRadius: 8 }}
         contentContainerStyle={{ padding: 10 }}
+        renderItem={({ item }) => (
+          <Text selectable style={{ fontFamily: monoFont, fontSize: 11, lineHeight: 16, color: STREAM_COLOR[item.stream] ?? colors.text }}>
+            {item.text.replace(/\n$/, '')}
+          </Text>
+        )}
+        onContentSizeChange={() => follow.current && list.current?.scrollToEnd({ animated: false })}
         onScroll={(e) => {
           const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
           follow.current = contentOffset.y + layoutMeasurement.height >= contentSize.height - 40;
         }}
         scrollEventThrottle={200}
-      >
-        <Text selectable style={{ fontFamily: monoFont, fontSize: 11, lineHeight: 16 }}>
-          {lines.map((l) => (
-            <Text key={l.id} style={{ color: STREAM_COLOR[l.stream] ?? colors.text }}>
-              {l.text}
-            </Text>
-          ))}
-        </Text>
-      </ScrollView>
+        initialNumToRender={60}
+        windowSize={8}
+      />
     </View>
   );
 }
+
+export default withSession(RunScreen);

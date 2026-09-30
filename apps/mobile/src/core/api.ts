@@ -74,8 +74,8 @@ export function createApi(client: TodoDevsClient, peer: string | null = null) {
     },
     workflows: {
       list: (projectId: string) => call<Workflow[]>('workflows.list', { projectId, scope: 'project' }),
-      run: (id: string, projectId: string, input: unknown) =>
-        call<{ runId: string; status: string; result?: { text?: unknown; json?: unknown } | null; error?: string }>('workflows.run', { id, projectId, input, wait: true }),
+      /** Starts a run and returns immediately; follow it on the run screen (workflows can take minutes). */
+      run: (id: string, projectId: string, input: unknown) => call<{ runId: string; status: string }>('workflows.run', { id, projectId, input }),
     },
     peers: {
       list: () => local<Peer[]>('peers.list'),

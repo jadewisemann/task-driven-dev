@@ -6,6 +6,7 @@ import type { Agent, Run, Task, TaskStatus } from '../../core/types.ts';
 import { useSession } from '../../state/connection.tsx';
 import { useLive } from '../../state/useLive.ts';
 import { Avatar, Badge, Body, Button, Card, Code, Dot, Empty, ErrorText, Muted, PickerModal, Row, Screen, SectionTitle, Title } from '../../ui/components.tsx';
+import { withSession } from '../../ui/RequireSession.tsx';
 import { colors } from '../../ui/theme.ts';
 
 interface TaskView {
@@ -16,7 +17,7 @@ interface TaskView {
 }
 
 /** Task detail: status, assignee, dependencies, result, and every action a PM would take from a phone. */
-export default function TaskScreen() {
+function TaskScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { api } = useSession();
   const [picker, setPicker] = useState<'agent' | 'status' | null>(null);
@@ -66,6 +67,7 @@ export default function TaskScreen() {
   return (
     <Screen refreshing={refreshing} onRefresh={refresh}>
       <Stack.Screen options={{ title: task.title.slice(0, 28) }} />
+      <ErrorText error={error} />
       <Title>{task.title}</Title>
       <Row wrap>
         <Badge label={task.status} color={STATUS_COLORS[task.status]} />
@@ -184,3 +186,5 @@ export default function TaskScreen() {
     </Screen>
   );
 }
+
+export default withSession(TaskScreen);

@@ -12,7 +12,6 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSAppTransportSecurity": {
-          "NSAllowsLocalNetworking": true,
           "NSAllowsArbitraryLoads": true
         },
         "NSLocalNetworkUsageDescription": "todo.devs connects to your todo.devs server on your local network or Tailscale."
@@ -27,7 +26,9 @@
       [
         "expo-build-properties",
         {
-          "android": { "usesCleartextTraffic": true }
+          "android": {
+            "usesCleartextTraffic": true
+          }
         }
       ]
     ],

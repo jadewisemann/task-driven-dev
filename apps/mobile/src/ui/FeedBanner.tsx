@@ -11,6 +11,7 @@ export function FeedBanner() {
     connecting: 'Connecting…',
     offline: `Offline — retrying${feedError ? ` (${feedError})` : ''}`,
     unauthorized: 'Access was revoked (token rotated). Tap to pair again.',
+    gone: 'That remote session no longer exists — switching back to this server.',
   }[feedStatus];
   return (
     <Pressable onPress={feedStatus === 'unauthorized' ? () => router.push('/connect') : undefined} style={{ backgroundColor: feedStatus === 'connecting' ? colors.panel2 : '#3a1420', paddingVertical: 6, paddingHorizontal: 12 }}>

@@ -15,6 +15,12 @@ export function normalizeCode(input: string): string {
 
 export const isValidCode = (code: string) => CODE.test(normalizeCode(code));
 
+/** Query string after "?" (no URL object needed — Hermes' URL support varies). */
+function queryOf(text: string): URLSearchParams {
+  const i = text.indexOf('?');
+  return new URLSearchParams(i === -1 ? '' : text.slice(i + 1).split('#')[0]);
+}
+
 /**
  * Parses what `todo-devs pair` prints, pasted or opened as a deep link:
  *   todo-devs://pair?url=http%3A%2F%2F100.64.0.2%3A7420&code=ABCDEFGHJK&name=box
@@ -25,7 +31,7 @@ export function parsePairingLink(text: string): PairingRequest | null {
   const raw = text.trim();
   try {
     if (raw.startsWith('todo-devs://')) {
-      const q = new URL(raw.replace(/^todo-devs:\/\//, 'http://x/')).searchParams;
+      const q = queryOf(raw);
       const url = q.get('url');
       const code = q.get('code');
       if (!url || !code) return null;
@@ -34,7 +40,7 @@ export function parsePairingLink(text: string): PairingRequest | null {
     if (/^https?:\/\//i.test(raw) && raw.includes('#pair=')) {
       const [base, hash] = raw.split('#');
       const code = new URLSearchParams(hash).get('pair');
-      if (!code) return null;
+      if (!code || !base) return null;
       return { url: normalizeBaseUrl(base), code: normalizeCode(code) };
     }
   } catch {
@@ -43,12 +49,11 @@ export function parsePairingLink(text: string): PairingRequest | null {
   return null;
 }
 
-/** Friendly default name for a server: explicit name, else its host. */
-export function serverLabel(url: string, name?: string): string {
-  if (name) return name;
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return url;
-  }
+/** Host part of a base URL, e.g. "100.64.0.2" from "http://100.64.0.2:7420". */
+export function hostOf(url: string): string {
+  const m = url.match(/^https?:\/\/(\[[^\]]+\]|[^/:?#]+)/i);
+  return m ? m[1]! : url;
 }
+
+/** Friendly default name for a server: explicit name, else its host. */
+export const serverLabel = (url: string, name?: string): string => name || hostOf(url);

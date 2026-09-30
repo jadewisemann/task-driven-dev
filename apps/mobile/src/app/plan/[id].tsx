@@ -6,13 +6,14 @@ import type { Agent, Plan, PlanTask } from '../../core/types.ts';
 import { useSession } from '../../state/connection.tsx';
 import { useLive } from '../../state/useLive.ts';
 import { Avatar, Badge, Body, Button, Card, Code, Empty, ErrorText, Input, Muted, PickerModal, Row, Screen, SectionTitle, Title } from '../../ui/components.tsx';
+import { withSession } from '../../ui/RequireSession.tsx';
 import { colors } from '../../ui/theme.ts';
 
 /**
  * Review a plan before it runs: every task, its agent (changeable), its
  * dependencies and — importantly — the description the agent will be given.
  */
-export default function PlanScreen() {
+function PlanScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { api } = useSession();
   const { data, error, refreshing, refresh } = useLive(async (a) => ({ plan: await a.orchestrator.get(String(id)), agents: await a.agents.list() }), [id], {
@@ -28,7 +29,7 @@ export default function PlanScreen() {
   const agents: Agent[] = data?.agents ?? [];
   // Start editing from the server's draft; keep local edits while the user works.
   useEffect(() => {
-    if (plan?.status === 'draft' && !edits) setEdits(structuredClone(plan.plan.tasks));
+    if (plan?.status === 'draft' && !edits) setEdits(plan.plan.tasks.map((t) => ({ ...t, dependsOn: [...t.dependsOn] })));
   }, [plan, edits]);
 
   if (!plan) return <Screen>{error ? <ErrorText error={error} /> : <Empty>Loading…</Empty>}</Screen>;
@@ -54,6 +55,7 @@ export default function PlanScreen() {
         <Badge label={PLAN_STATUS_LABEL[plan.status]} color={plan.status === 'failed' || plan.status === 'incomplete' ? colors.danger : colors.accent} />
         <Muted small>{plan.source === 'agent' ? 'planned by the orchestrator model' : plan.source === 'heuristic' ? 'built-in planner' : ''}</Muted>
       </Row>
+      <ErrorText error={error} />
       <Title>{plan.goal}</Title>
       {plan.status === 'planning' && (
         <Row>
@@ -137,3 +139,5 @@ export default function PlanScreen() {
     </Screen>
   );
 }
+
+export default withSession(PlanScreen);

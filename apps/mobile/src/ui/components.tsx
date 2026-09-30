@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from 'react';
-import { ActivityIndicator, FlatList, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { initials } from '../core/board.ts';
 import { colors, radius, space } from './theme.ts';
@@ -36,7 +36,10 @@ export function Card({ children, onPress, style, accent }: { children: ReactNode
 type ButtonKind = 'primary' | 'success' | 'danger' | 'ghost' | 'default';
 const BUTTON_BG: Record<ButtonKind, string> = { primary: colors.accent, success: '#1f7a5c', danger: 'transparent', ghost: 'transparent', default: colors.panel2 };
 
-/** Button that shows a spinner and blocks double taps while its async action runs. */
+/**
+ * Button that shows a spinner and blocks double taps while its async action
+ * runs. Errors that reach it are shown in an alert (never an unhandled rejection).
+ */
 export function Button({ title, onPress, kind = 'default', disabled, small }: { title: string; onPress: () => unknown; kind?: ButtonKind; disabled?: boolean; small?: boolean }) {
   const [busy, setBusy] = useState(false);
   const press = async () => {
@@ -44,6 +47,8 @@ export function Button({ title, onPress, kind = 'default', disabled, small }: { 
     setBusy(true);
     try {
       await onPress();
+    } catch (err) {
+      Alert.alert('Something went wrong', err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }

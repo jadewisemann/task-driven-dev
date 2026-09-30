@@ -19,13 +19,16 @@ export const NETWORK = -1;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
-/** Normalises what a user typed ("192.168.0.5:7420", "http://host:7420/") into a base URL. */
+/**
+ * Normalises what a user typed ("192.168.0.5", "box.ts.net:7420", "http://host:7420/path")
+ * into "http://host:port". Implemented without URL setters (Hermes' URL support varies).
+ */
 export function normalizeBaseUrl(input: string): string {
-  let url = input.trim();
-  if (!/^https?:\/\//i.test(url)) url = `http://${url}`;
-  const parsed = new URL(url);
-  if (!parsed.port && parsed.protocol === 'http:') parsed.port = '7420';
-  return `${parsed.protocol}//${parsed.host}`;
+  const m = input.trim().match(/^(?:(https?):\/\/)?(\[[0-9a-f:.]+\]|[^/:?#\s]+)(?::(\d{1,5}))?(?:[/?#].*)?$/i);
+  if (!m) throw new Error(`Not a server address: ${input}`);
+  const scheme = (m[1] || 'http').toLowerCase();
+  const port = m[3] ? `:${m[3]}` : scheme === 'http' ? ':7420' : '';
+  return `${scheme}://${m[2]!.toLowerCase()}${port}`;
 }
 
 async function withTimeout<T>(ms: number, signal: AbortSignal | undefined, run: (signal: AbortSignal) => Promise<T>): Promise<T> {

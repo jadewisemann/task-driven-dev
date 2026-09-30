@@ -17,12 +17,14 @@ interface ConnectionValue {
   feedStatus: FeedStatus;
   feedError?: string;
   projects: Project[];
+  /** False until the active session's project list has loaded (after a switch too). */
+  projectsReady: boolean;
   project: Project | null;
-  selectProject: (id: string) => void;
+  selectProject: (id: string) => Promise<void>;
   peer: string | null;
   selectPeer: (peerId: string | null) => Promise<void>;
   pair: (request: PairingRequest) => Promise<SavedServer>;
-  switchServer: (id: string) => void;
+  switchServer: (id: string) => Promise<void>;
   removeServer: (id: string) => Promise<void>;
   reloadProjects: () => Promise<void>;
 }
@@ -40,10 +42,13 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [servers, setServers] = useState<SavedServer[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsReady, setProjectsReady] = useState(false);
   const [feedStatus, setFeedStatus] = useState<FeedStatus>('stopped');
   const [feedError, setFeedError] = useState<string | undefined>();
   const serversRef = useRef(servers);
   serversRef.current = servers;
+  const activeRef = useRef(activeId);
+  activeRef.current = activeId;
 
   useEffect(() => {
     loadServers()
@@ -51,21 +56,22 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         setServers(s);
         setActiveId(a);
       })
+      .catch(() => {})
       .finally(() => setReady(true));
   }, []);
 
+  /** Writes to the keychain first; memory only changes once the write succeeded. */
   const persist = useCallback(async (next: SavedServer[], nextActive: string | null) => {
+    await saveServers(next, nextActive, serversRef.current);
+    serversRef.current = next;
+    activeRef.current = nextActive;
     setServers(next);
     setActiveId(nextActive);
-    await saveServers(next, nextActive);
   }, []);
 
   const updateActive = useCallback(
-    (patch: Partial<SavedServer>) => {
-      const next = serversRef.current.map((s) => (s.id === activeId ? { ...s, ...patch } : s));
-      void persist(next, activeId);
-    },
-    [activeId, persist],
+    (patch: Partial<SavedServer>) => persist(serversRef.current.map((s) => (s.id === activeRef.current ? { ...s, ...patch } : s)), activeRef.current),
+    [persist],
   );
 
   const active = servers.find((s) => s.id === activeId) ?? null;
@@ -75,7 +81,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const api = useMemo(() => (client ? createApi(client, peer) : null), [client, peer]);
   const feed = useMemo(() => (client ? new EventFeed(client, { peer }) : null), [client, peer]);
 
-  // Run the feed only while the app is in the foreground; resuming triggers a reset (reload).
+  // Run the feed only in the foreground. Only a real return from the background restarts it
+  // (iOS also reports inactive -> active for Control Center, Face ID, app switcher peeks).
   useEffect(() => {
     if (!feed) return;
     const offStatus = feed.onStatus((status, error) => {
@@ -83,9 +90,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       setFeedError(error);
     });
     feed.start();
+    let previous = AppState.currentState;
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') feed.start();
+      if (state === 'active' && previous === 'background') feed.start();
       else if (state === 'background') feed.stop();
+      previous = state;
     });
     return () => {
       sub.remove();
@@ -94,16 +103,34 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     };
   }, [feed]);
 
+  // The remote session disappeared on the server: fall back to the server's own session.
+  useEffect(() => {
+    if (feedStatus === 'gone' && peer) void updateActive({ peer: null, projectId: null });
+  }, [feedStatus, peer, updateActive]);
+
+  const projectSeq = useRef(0);
   const reloadProjects = useCallback(async () => {
-    if (!api) return setProjects([]);
-    try {
-      setProjects(await api.projects.list());
-    } catch {
+    const mine = ++projectSeq.current;
+    if (!api) {
       setProjects([]);
+      setProjectsReady(false);
+      return;
+    }
+    try {
+      const list = await api.projects.list();
+      if (mine === projectSeq.current) {
+        setProjects(list);
+        setProjectsReady(true);
+      }
+    } catch {
+      if (mine === projectSeq.current) setProjectsReady(true); // screens show the feed banner / errors
     }
   }, [api]);
 
   useEffect(() => {
+    // New session: never let screens query it with the previous session's project.
+    setProjects([]);
+    setProjectsReady(false);
     void reloadProjects();
     if (!feed) return;
     return feed.onReset(() => void reloadProjects());
@@ -111,23 +138,16 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
   const project = projects.find((p) => p.id === active?.projectId) ?? projects[0] ?? null;
 
-  const value: ConnectionValue = {
-    ready,
-    servers,
-    active,
-    api,
-    feed,
-    feedStatus,
-    feedError,
-    projects,
-    project,
-    peer,
-    selectProject: (id) => updateActive({ projectId: id }),
-    async selectPeer(peerId) {
+  const selectProject = useCallback((id: string) => updateActive({ projectId: id }), [updateActive]);
+  const selectPeer = useCallback(
+    async (peerId: string | null) => {
       if (peerId && api) await api.peers.connect(peerId); // opens the SSH session first; throws if unreachable
-      updateActive({ peer: peerId, projectId: null });
+      await updateActive({ peer: peerId, projectId: null });
     },
-    async pair(request) {
+    [api, updateActive],
+  );
+  const pair = useCallback(
+    async (request: PairingRequest) => {
       const token = await TodoDevsClient.pair(request.url, request.code);
       const existing = serversRef.current.find((s) => s.url === request.url);
       const server: SavedServer = existing ? { ...existing, token } : { id: newId(), name: serverLabel(request.url, request.name), url: request.url, token, projectId: null, peer: null };
@@ -135,14 +155,21 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       await persist(next, server.id);
       return server;
     },
-    switchServer: (id) => void persist(serversRef.current, id),
-    async removeServer(id) {
+    [persist],
+  );
+  const switchServer = useCallback((id: string) => persist(serversRef.current, id), [persist]);
+  const removeServer = useCallback(
+    async (id: string) => {
       const next = serversRef.current.filter((s) => s.id !== id);
-      await persist(next, activeId === id ? next[0]?.id ?? null : activeId);
+      await persist(next, activeRef.current === id ? next[0]?.id ?? null : activeRef.current);
     },
-    reloadProjects,
-  };
+    [persist],
+  );
 
+  const value = useMemo<ConnectionValue>(
+    () => ({ ready, servers, active, api, feed, feedStatus, feedError, projects, projectsReady, project, selectProject, peer, selectPeer, pair, switchServer, removeServer, reloadProjects }),
+    [ready, servers, active, api, feed, feedStatus, feedError, projects, projectsReady, project, selectProject, peer, selectPeer, pair, switchServer, removeServer, reloadProjects],
+  );
   return <ConnectionContext.Provider value={value}>{children}</ConnectionContext.Provider>;
 }
 
@@ -152,7 +179,7 @@ export function useConnection(): ConnectionValue {
   return ctx;
 }
 
-/** For screens that only render when connected (the tab layout guarantees it). */
+/** For screens rendered inside <RequireSession> (tabs and detail routes). */
 export function useSession() {
   const ctx = useConnection();
   if (!ctx.api || !ctx.feed || !ctx.active) throw new Error('No active server');

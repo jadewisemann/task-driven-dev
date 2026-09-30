@@ -5,7 +5,7 @@ import type { Peer, Workflow } from '../../core/types.ts';
 import { useSession } from '../../state/connection.tsx';
 import { useLive } from '../../state/useLive.ts';
 import { FeedBanner } from '../../ui/FeedBanner.tsx';
-import { Badge, Button, Card, Code, Dot, ErrorText, Input, Muted, Row, Screen, SectionTitle, monoFont } from '../../ui/components.tsx';
+import { Badge, Button, Card, Dot, ErrorText, Input, Muted, Row, Screen, SectionTitle, monoFont } from '../../ui/components.tsx';
 import { colors } from '../../ui/theme.ts';
 
 const PEER_COLOR: Record<Peer['status']['state'], string> = { connected: colors.accent2, connecting: colors.warn, error: colors.danger, disconnected: colors.muted };
@@ -14,7 +14,8 @@ const PEER_COLOR: Record<Peer['status']['state'], string> = { connected: colors.
 export default function More() {
   const { api, active, servers, switchServer, projects, project, selectProject, peer, selectPeer } = useSession();
   const [sessionError, setSessionError] = useState<unknown>(null);
-  const peersQuery = useLive<Peer[]>((a) => a.peers.list(), [], { match: (e) => e.type.startsWith('peer.') });
+  // In a remote session the feed only carries that machine's events, so peer status is also polled.
+  const peersQuery = useLive<Peer[]>((a) => a.peers.list(), [], { match: (e) => e.type.startsWith('peer.'), intervalMs: 15_000 });
   const pid = project?.id;
   const workflowsQuery = useLive<Workflow[]>((a) => (pid ? a.workflows.list(pid) : Promise.resolve([])), [pid], { match: (e) => e.type.startsWith('workflow.') });
 
@@ -55,7 +56,7 @@ export default function More() {
 
         <SectionTitle>Project</SectionTitle>
         {projects.map((p) => (
-          <Card key={p.id} onPress={() => selectProject(p.id)} accent={p.id === project?.id ? colors.accent : undefined}>
+          <Card key={p.id} onPress={() => void selectProject(p.id)} accent={p.id === project?.id ? colors.accent : undefined}>
             <Text style={{ color: colors.text }}>{p.name}</Text>
             {p.description ? <Muted small>{p.description}</Muted> : null}
           </Card>
@@ -67,7 +68,7 @@ export default function More() {
 
         <SectionTitle>Servers</SectionTitle>
         {servers.map((s) => (
-          <Card key={s.id} onPress={() => switchServer(s.id)} accent={s.id === active.id ? colors.accent2 : undefined}>
+          <Card key={s.id} onPress={() => void switchServer(s.id)} accent={s.id === active.id ? colors.accent2 : undefined}>
             <Text style={{ color: colors.text }}>{s.name}</Text>
             <Muted small>{s.url}</Muted>
           </Card>
@@ -79,15 +80,14 @@ export default function More() {
 }
 
 /** Runs a project workflow with a JSON input (prefilled from its Start node sample). */
-function WorkflowRunner({ workflow, projectId, run }: { workflow: Workflow; projectId: string; run: (id: string, projectId: string, input: unknown) => Promise<{ status: string; result?: { text?: unknown; json?: unknown } | null; error?: string }> }) {
+function WorkflowRunner({ workflow, projectId, run }: { workflow: Workflow; projectId: string; run: (id: string, projectId: string, input: unknown) => Promise<{ runId: string; status: string }> }) {
   const sample = workflow.graph.nodes.find((n) => n.type === 'trigger')?.config?.sample ?? {};
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState(JSON.stringify(sample, null, 2));
-  const [output, setOutput] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  /** Starts the run and opens its live log (workflows with agents can take minutes). */
   async function go() {
     setError(null);
-    setOutput(null);
     let parsed: unknown;
     try {
       parsed = JSON.parse(input);
@@ -96,7 +96,7 @@ function WorkflowRunner({ workflow, projectId, run }: { workflow: Workflow; proj
     }
     try {
       const res = await run(workflow.id, projectId, parsed);
-      setOutput(`${res.status}${res.error ? `: ${res.error}` : ''}\n${JSON.stringify(res.result ?? null, null, 2)}`);
+      router.push(`/run/${res.runId}`);
     } catch (err) {
       setError(err);
     }
@@ -110,7 +110,6 @@ function WorkflowRunner({ workflow, projectId, run }: { workflow: Workflow; proj
           <Input label="Input JSON" multiline value={input} onChangeText={setInput} style={{ fontFamily: monoFont }} />
           <Button kind="success" title="▶ Run workflow" onPress={go} />
           <ErrorText error={error} />
-          {output ? <Code>{output}</Code> : null}
         </View>
       )}
     </Card>

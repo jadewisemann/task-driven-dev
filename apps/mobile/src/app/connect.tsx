@@ -24,7 +24,7 @@ export default function Connect() {
       const req = request ?? { url: normalizeBaseUrl(url), code: normalizeCode(code) };
       if (!isValidCode(req.code)) throw new Error('The pairing code has 10 letters/digits — run `todo-devs pair` on the computer');
       await pair(req);
-      router.replace('/board');
+      router.dismissTo('/board');
     } catch (err) {
       setError(err);
     }
@@ -57,7 +57,7 @@ export default function Connect() {
 
         {servers.length > 0 && <SectionTitle>Paired servers</SectionTitle>}
         {servers.map((s) => (
-          <Card key={s.id} onPress={() => (switchServer(s.id), router.replace('/board'))} accent={s.id === active?.id ? colors.accent2 : undefined}>
+          <Card key={s.id} onPress={async () => (await switchServer(s.id), router.dismissTo('/board'))} accent={s.id === active?.id ? colors.accent2 : undefined}>
             <Row>
               <Text style={{ color: colors.text, fontWeight: '600', flex: 1 }}>{s.name}</Text>
               {s.id === active?.id && <Badge label="active" color={colors.accent2} />}

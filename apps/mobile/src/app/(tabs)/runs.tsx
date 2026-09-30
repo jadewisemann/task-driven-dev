@@ -13,6 +13,7 @@ const STATUS_COLOR: Record<string, string> = { running: colors.warn, succeeded: 
 /** Every agent / workflow / planning run in the project, newest first. */
 export default function Runs() {
   const { project } = useSession();
+  // (project may briefly be null while a new session loads; the list is then empty)
   const pid = project?.id;
   const { data, error, refreshing, refresh } = useLive<Run[]>((a) => (pid ? a.runs.list({ projectId: pid, limit: 100 }) : Promise.resolve([])), [pid], {
     match: (e) => e.type === 'run.started' || e.type === 'run.finished',

@@ -18,7 +18,7 @@ const OPEN = new Set(['planning', 'draft', 'failed']);
  * and assign it, then follow the dependency flow lane by lane.
  */
 export default function Orchestrator() {
-  const { api, project } = useSession();
+  const { api, project, projectsReady } = useSession();
   const pid = project?.id;
   const [goal, setGoal] = useState('');
   const [autoRun, setAutoRun] = useState(true);
@@ -31,7 +31,7 @@ export default function Orchestrator() {
   const graph: TaskGraph | undefined = data?.graph;
   const agents: Agent[] = data?.agents ?? [];
   const byId = useMemo(() => new Map((graph?.tasks ?? []).map((t) => [t.id, t])), [graph]);
-  if (!pid) return <Empty>No project on this server yet.</Empty>;
+  if (!pid) return <Empty>{projectsReady ? 'No project on this server yet.' : 'Loading…'}</Empty>;
   const plans: Plan[] = data?.plans ?? [];
   const open = plans.filter((p) => OPEN.has(p.status));
   const history = plans.filter((p) => !OPEN.has(p.status)).slice(0, 8);

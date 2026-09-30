@@ -2,13 +2,14 @@ import { Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import type { Agent, Effort, Harness } from '../../core/types.ts';
 import { useSession } from '../../state/connection.tsx';
+import { withSession } from '../../ui/RequireSession.tsx';
 import { useLive } from '../../state/useLive.ts';
 import { Body, Button, Empty, ErrorText, Input, Muted, Row, Screen, SectionTitle, Segmented, Title } from '../../ui/components.tsx';
 
 const EFFORTS: Effort[] = ['low', 'medium', 'high', 'max'];
 
 /** Quick agent tuning from the phone: model, effort, tier. */
-export default function AgentScreen() {
+function AgentScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { api } = useSession();
   const { data, error } = useLive(async (a) => {
@@ -50,6 +51,7 @@ export default function AgentScreen() {
   return (
     <Screen>
       <Stack.Screen options={{ title: agent.name }} />
+      <ErrorText error={error} />
       <Title>{agent.name}</Title>
       <Muted>{`${agent.role} · ${harness?.name ?? agent.harness}${harness && !harness.installed ? ' (not installed on the server)' : ''}`}</Muted>
       {agent.persona ? <Body>{agent.persona}</Body> : null}
@@ -71,3 +73,5 @@ export default function AgentScreen() {
     </Screen>
   );
 }
+
+export default withSession(AgentScreen);

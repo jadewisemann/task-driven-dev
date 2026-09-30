@@ -1,7 +1,8 @@
 import { ApiError, UNAUTHORIZED, type TodoDevsClient } from './client.ts';
 import type { ServerEvent } from './types.ts';
 
-export type FeedStatus = 'connecting' | 'live' | 'offline' | 'unauthorized' | 'stopped';
+/** `gone`: the remote session (peer) no longer exists on the server — terminal, pick another session. */
+export type FeedStatus = 'connecting' | 'live' | 'offline' | 'unauthorized' | 'gone' | 'stopped';
 
 type Listener = (event: ServerEvent) => void;
 type ResetListener = () => void;
@@ -127,6 +128,10 @@ export class EventFeed {
         if (err instanceof ApiError && err.code === UNAUTHORIZED) {
           this.setStatus('unauthorized', err.message);
           return; // the token was rotated: the user has to pair again
+        }
+        if (err instanceof ApiError && err.code === 404) {
+          this.setStatus('gone', err.message);
+          return; // e.g. the peer was removed on the server; retrying cannot help
         }
         this.setStatus('offline', (err as Error).message);
         needsSync = true; // we may have missed events

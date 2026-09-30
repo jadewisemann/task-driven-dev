@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, View } from 'react-native';
 import { COLUMNS, groupByColumn, progress } from '../../core/board.ts';
 import type { Agent, Task } from '../../core/types.ts';
@@ -11,8 +11,9 @@ import { Button, Empty, ErrorText, Input, Muted, Progress, Row, Screen, Segmente
 
 /** Board: one column at a time (column tabs with counts), cards, quick add. */
 export default function Board() {
-  const { api, project } = useSession();
+  const { api, project, projectsReady } = useSession();
   const [column, setColumn] = useState('todo');
+  const adding = useRef(false);
   const [title, setTitle] = useState('');
   const pid = project?.id;
   const { data, error, refreshing, refresh } = useLive(async (a) => (pid ? { tasks: await a.tasks.list(pid), agents: await a.agents.list() } : { tasks: [] as Task[], agents: [] as Agent[] }), [pid]);
@@ -22,14 +23,20 @@ export default function Board() {
   const groups = useMemo(() => groupByColumn(tasks), [tasks]);
   const p = progress(tasks);
 
-  if (!pid) return <Empty>No project on this server yet.</Empty>;
+  if (!pid) return <Empty>{projectsReady ? 'No project on this server yet.' : 'Loading…'}</Empty>;
   const col = COLUMNS.find((c) => c.id === column)!;
   const list = groups[column] ?? [];
 
+  /** Guarded against double submits (keyboard "done" + button). */
   async function add() {
-    if (!title.trim() || !pid) return;
-    await api.tasks.create({ projectId: pid, title: title.trim(), status: column === 'backlog' ? 'backlog' : 'todo' });
-    setTitle('');
+    if (!title.trim() || !pid || adding.current) return;
+    adding.current = true;
+    try {
+      await api.tasks.create({ projectId: pid, title: title.trim(), status: column === 'backlog' ? 'backlog' : 'todo' });
+      setTitle('');
+    } finally {
+      adding.current = false;
+    }
   }
 
   return (
@@ -47,7 +54,7 @@ export default function Board() {
         {(column === 'backlog' || column === 'todo') && (
           <Row>
             <View style={{ flex: 1 }}>
-              <Input placeholder={`Add to ${col.title}…`} value={title} onChangeText={setTitle} onSubmitEditing={add} returnKeyType="done" />
+              <Input placeholder={`Add to ${col.title}…`} value={title} onChangeText={setTitle} onSubmitEditing={() => void add().catch(() => {})} returnKeyType="done" />
             </View>
             <Button title="Add" onPress={add} disabled={!title.trim()} />
           </Row>
