@@ -1,12 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Redirect, Tabs } from 'expo-router';
+import type { ColorValue } from 'react-native';
 import { useConnection } from '../../state/connection.tsx';
 import { colors } from '../../ui/theme.ts';
 
 type IconName = keyof typeof Ionicons.glyphMap;
 const icon =
   (name: IconName) =>
-  ({ color, size }: { color: string; size: number }) => <Ionicons name={name} color={color} size={size} />;
+  ({ color, size }: { color: ColorValue; size: number }) => <Ionicons name={name} color={color} size={size} />;
 
 /** Tab bar for a connected server. Each tab screen renders <FeedBanner/> itself. */
 export default function TabsLayout() {
